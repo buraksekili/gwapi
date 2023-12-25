@@ -1,0 +1,64 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tyk-gw-conf
+  namespace: tyk
+data:
+  tyk.conf: |
+    {
+      "log_level": "debug",
+      "listen_port": 8080,
+      "secret": "CHANGEME",
+      "node_secret": "CHANGEME",
+      "use_db_app_configs": false,
+      "app_path": "/opt/tyk-gateway/apps/",
+      "storage": {
+        "type": "redis",
+        "addrs": "redis.tyk.svc:6379",
+        "port": 6379,
+        "password": "",
+        "database": 0,
+        "optimisation_max_idle": 100,
+        "optimisation_max_active": 500
+      },
+      "enable_analytics": false,
+      "policies": {
+        "policy_source": "file",
+        "policy_record_name": "/opt/tyk-gateway/policies/policies.json"
+      },
+      "hash_keys": true
+    }
+---
+apiVersion: gateway.buraksekili.github.io/v1alpha1
+kind: GatewayConfiguration
+metadata:
+  name: tyk-gw-oss
+  namespace: tyk
+spec:
+  tyk:
+    configMapRef:
+      name: tyk-gw-conf
+      namespace: tyk
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: tykconf
+spec:
+  controllerName: buraksekili.github.com/gateway-api-controller-tyk
+  parametersRef:
+    group: gateway
+    kind: GatewayConfiguration
+    name: tyk-gw-oss
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tyk-gateway
+  namespace: tyk
+spec:
+  gatewayClassName: tykconf
+  listeners:
+    - name: http
+      port: 8081
+      protocol: HTTP

@@ -18,11 +18,14 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"github.com/buraksekili/gateway-api-tyk/api/v1alpha1"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -80,11 +83,31 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
+	tykGwConf := v1alpha1.GatewayConfiguration{}
+	if gwClass.Spec.ParametersRef != nil {
+		if !validParameters(gwClass.Spec.ParametersRef) {
+			return ctrl.Result{}, fmt.Errorf("invalid paramaters ref")
+		}
+
+		err := r.Client.Get(
+			ctx,
+			types.NamespacedName{Name: gwClass.Spec.ParametersRef.Name, Namespace: req.Namespace},
+			&tykGwConf,
+		)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	if !gw.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &gw)
 	}
 
-	return r.reconcile(ctx, l, &gw)
+	return r.reconcile(ctx, l, &gw, tykGwConf)
+}
+
+func validParameters(ref *gwv1.ParametersReference) bool {
+	return ref.Name != "" && ref.Group == "gateway" && ref.Kind == "GatewayConfiguration"
 }
 
 func (r *GatewayReconciler) reconcileDelete(ctx context.Context, gw *gwv1.Gateway) (ctrl.Result, error) {
@@ -95,7 +118,7 @@ func (r *GatewayReconciler) reconcileDelete(ctx context.Context, gw *gwv1.Gatewa
 	return ctrl.Result{}, nil
 }
 
-func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gwv1.Gateway) (ctrl.Result, error) {
+func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gwv1.Gateway, conf v1alpha1.GatewayConfiguration) (ctrl.Result, error) {
 	controllerutil.AddFinalizer(gw, finalizer)
 
 	labels := map[gwv1.AnnotationKey]gwv1.AnnotationValue{}
@@ -121,8 +144,11 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 		envs = append(envs, corev1.EnvVar{Name: "TYK_GW_LISTENPORT", Value: listenerPort.String()})
 	}
 
-	deploy := deployment(l, envs, labels, annotations)
+	deploy := deployment(l, envs, conf.Spec.Tyk.ConfigMapRef.Name, labels, annotations)
+	deploy.Namespace = gw.Namespace
+
 	l.Info("prepared deployment", "deploy meta", deploy.ObjectMeta)
+
 	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, &deploy, func() error {
 		return nil
 	})
@@ -146,7 +172,7 @@ func getRawMap(data map[gwv1.AnnotationKey]gwv1.AnnotationValue) map[string]stri
 	return d
 }
 
-func deployment(l logr.Logger, envs []corev1.EnvVar, labels, annotations map[gwv1.AnnotationKey]gwv1.AnnotationValue) appsv1.Deployment {
+func deployment(l logr.Logger, envs []corev1.EnvVar, name string, labels, annotations map[gwv1.AnnotationKey]gwv1.AnnotationValue) appsv1.Deployment {
 	replica := int32(1)
 	lpEnv := getEnv(envs, "TYK_GW_LISTENPORT")
 	if lpEnv.Name == "" {
@@ -180,12 +206,31 @@ func deployment(l logr.Logger, envs []corev1.EnvVar, labels, annotations map[gwv
 					Annotations: getRawMap(annotations),
 				},
 				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{{
-						Name:  "tyk-gateway",
-						Image: "docker.tyk.io/tyk-gateway/tyk-gateway:v5.2.3",
-						Ports: []corev1.ContainerPort{{ContainerPort: listenPort}},
-						Env:   envs,
+					Volumes: []corev1.Volume{
+						{
+							Name: "config-volume",
+							VolumeSource: corev1.VolumeSource{
+								ConfigMap: &corev1.ConfigMapVolumeSource{
+									LocalObjectReference: corev1.LocalObjectReference{
+										Name: name,
+									},
+								},
+							},
+						},
 					},
+					Containers: []corev1.Container{
+						{
+							Name:  "tyk-gateway",
+							Image: "docker.tyk.io/tyk-gateway/tyk-gateway:v5.2.3",
+							Ports: []corev1.ContainerPort{{ContainerPort: listenPort}},
+							Env:   envs,
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "config-volume",
+									MountPath: "/etc/tyk-gateway",
+								},
+							},
+						},
 					},
 				},
 			},
