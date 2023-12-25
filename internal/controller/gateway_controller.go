@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -30,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	"strconv"
 )
 
 const finalizer = "finalizers.buraksekili.github.io/gateway-api-tyk"
@@ -150,13 +150,17 @@ func deployment(l logr.Logger, envs []corev1.EnvVar, labels, annotations map[gwv
 	replica := int32(1)
 	lpEnv := getEnv(envs, "TYK_GW_LISTENPORT")
 	if lpEnv.Name == "" {
-		l.Info("could not find listen port, using default 8080")
+		l.Info("failed to find listen port, using default 8080")
 		lpEnv = corev1.EnvVar{Name: "TYK_GW_LISTENPORT", Value: "8080"}
 	}
-	listenPortStr := lpEnv.Value
-	listenPorts := intstr.FromString(listenPortStr)
-	fmt.Println(listenPorts)
-	listenPort := int32(8080)
+
+	lp, err := strconv.Atoi(lpEnv.Value)
+	if err != nil {
+		l.Info("failed to convert listen port to integer, using default 8080", "error", err)
+		lp = 8080
+	}
+
+	listenPort := int32(lp)
 
 	return appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -176,17 +180,12 @@ func deployment(l logr.Logger, envs []corev1.EnvVar, labels, annotations map[gwv
 					Annotations: getRawMap(annotations),
 				},
 				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "tyk-gateway",
-							Image: "docker.tyk.io/tyk-gateway/tyk-gateway:v5.2.3",
-							Ports: []corev1.ContainerPort{
-								{
-									ContainerPort: listenPort,
-								},
-							},
-							Env: envs,
-						},
+					Containers: []corev1.Container{{
+						Name:  "tyk-gateway",
+						Image: "docker.tyk.io/tyk-gateway/tyk-gateway:v5.2.3",
+						Ports: []corev1.ContainerPort{{ContainerPort: listenPort}},
+						Env:   envs,
+					},
 					},
 				},
 			},
