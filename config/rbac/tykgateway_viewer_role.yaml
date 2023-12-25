@@ -1,0 +1,27 @@
+# permissions for end users to view tykgateways.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/instance: tykgateway-viewer-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: gateway-api-tyk
+    app.kubernetes.io/part-of: gateway-api-tyk
+    app.kubernetes.io/managed-by: kustomize
+  name: tykgateway-viewer-role
+rules:
+- apiGroups:
+  - gateway.buraksekili.github.io
+  resources:
+  - tykgateways
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - gateway.buraksekili.github.io
+  resources:
+  - tykgateways/status
+  verbs:
+  - get
