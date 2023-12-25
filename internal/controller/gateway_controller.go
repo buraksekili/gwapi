@@ -137,6 +137,8 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 			return ctrl.Result{}, nil
 		}
 
+		// TODO: Configure Tyk Gateway here based on listener options.
+
 		listenerPort := intstr.FromInt32(int32(listener.Port))
 		envs = append(envs, corev1.EnvVar{Name: "TYK_GW_LISTENPORT", Value: listenerPort.String()})
 	}
