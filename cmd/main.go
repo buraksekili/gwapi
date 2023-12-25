@@ -19,6 +19,7 @@ package main
 import (
 	"flag"
 	"os"
+
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -34,6 +35,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	tykgatewayv1 "github.com/buraksekili/gateway-api-tyk/api/v1"
+	tykgwv1alpha1 "github.com/buraksekili/gateway-api-tyk/api/v1alpha1"
 	"github.com/buraksekili/gateway-api-tyk/internal/controller"
 	//+kubebuilder:scaffold:imports
 )
@@ -48,6 +50,7 @@ func init() {
 
 	utilruntime.Must(tykgatewayv1.AddToScheme(scheme))
 	utilruntime.Must(gwv1.AddToScheme(scheme))
+	utilruntime.Must(tykgwv1alpha1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 

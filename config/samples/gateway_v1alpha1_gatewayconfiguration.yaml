@@ -1,0 +1,12 @@
+apiVersion: gateway.buraksekili.github.io/v1alpha1
+kind: GatewayConfiguration
+metadata:
+  labels:
+    app.kubernetes.io/name: gatewayconfiguration
+    app.kubernetes.io/instance: gatewayconfiguration-sample
+    app.kubernetes.io/part-of: gateway-api-tyk
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: gateway-api-tyk
+  name: gatewayconfiguration-sample
+spec:
+  # TODO(user): Add fields here
