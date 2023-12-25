@@ -23,14 +23,6 @@ resources:
     namespaced: true
   domain: buraksekili.github.io
   group: gateway
-  kind: Delete
-  path: github.com/buraksekili/gateway-api-tyk/api/v1
-  version: v1
-- api:
-    crdVersion: v1
-    namespaced: true
-  domain: buraksekili.github.io
-  group: gateway
   kind: TykGateway
   path: github.com/buraksekili/gateway-api-tyk/api/v1
   version: v1
@@ -42,4 +34,9 @@ resources:
   kind: GatewayConfiguration
   path: github.com/buraksekili/gateway-api-tyk/api/v1alpha1
   version: v1alpha1
+- controller: true
+  domain: buraksekili.github.io
+  group: gateway.networking.k8s.io
+  kind: HTTPRoute
+  version: v1
 version: "3"
