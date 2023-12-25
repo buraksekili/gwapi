@@ -21,9 +21,7 @@ import (
 	"fmt"
 	"github.com/buraksekili/gateway-api-tyk/api/v1alpha1"
 	"github.com/go-logr/logr"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -32,7 +30,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
-	"strconv"
 )
 
 const finalizer = "finalizers.buraksekili.github.io/gateway-api-tyk"
@@ -160,92 +157,6 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 
 	l.Info("resource has created / updated", "result", result)
 	return ctrl.Result{}, nil
-}
-
-// consider using json marshaling
-func getRawMap(data map[gwv1.AnnotationKey]gwv1.AnnotationValue) map[string]string {
-	d := make(map[string]string)
-	for k, v := range data {
-		d[string(k)] = string(v)
-	}
-
-	return d
-}
-
-func deployment(l logr.Logger, envs []corev1.EnvVar, name string, labels, annotations map[gwv1.AnnotationKey]gwv1.AnnotationValue) appsv1.Deployment {
-	replica := int32(1)
-	lpEnv := getEnv(envs, "TYK_GW_LISTENPORT")
-	if lpEnv.Name == "" {
-		l.Info("failed to find listen port, using default 8080")
-		lpEnv = corev1.EnvVar{Name: "TYK_GW_LISTENPORT", Value: "8080"}
-	}
-
-	lp, err := strconv.Atoi(lpEnv.Value)
-	if err != nil {
-		l.Info("failed to convert listen port to integer, using default 8080", "error", err)
-		lp = 8080
-	}
-
-	listenPort := int32(lp)
-
-	return appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        "tyk-gateway",
-			Namespace:   "default",
-			Labels:      getRawMap(labels),
-			Annotations: getRawMap(annotations),
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: &replica,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: getRawMap(labels),
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels:      getRawMap(labels),
-					Annotations: getRawMap(annotations),
-				},
-				Spec: corev1.PodSpec{
-					Volumes: []corev1.Volume{
-						{
-							Name: "config-volume",
-							VolumeSource: corev1.VolumeSource{
-								ConfigMap: &corev1.ConfigMapVolumeSource{
-									LocalObjectReference: corev1.LocalObjectReference{
-										Name: name,
-									},
-								},
-							},
-						},
-					},
-					Containers: []corev1.Container{
-						{
-							Name:  "tyk-gateway",
-							Image: "docker.tyk.io/tyk-gateway/tyk-gateway:v5.2.3",
-							Ports: []corev1.ContainerPort{{ContainerPort: listenPort}},
-							Env:   envs,
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      "config-volume",
-									MountPath: "/etc/tyk-gateway",
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
-func getEnv(envs []corev1.EnvVar, envName string) corev1.EnvVar {
-	for _, env := range envs {
-		if env.Name == envName {
-			return env
-		}
-	}
-
-	return corev1.EnvVar{}
 }
 
 // SetupWithManager sets up the controller with the Manager.
