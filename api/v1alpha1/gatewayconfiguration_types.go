@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
@@ -38,6 +39,10 @@ type Tyk struct {
 type NamespacedName struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace,omitempty"`
+}
+
+func (N *NamespacedName) NamespacedName() types.NamespacedName {
+	return types.NamespacedName{Name: N.Name, Namespace: N.Namespace}
 }
 
 // GatewayConfigurationStatus defines the observed state of GatewayConfiguration

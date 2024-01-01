@@ -50,6 +50,7 @@ spec:
     group: gateway
     kind: GatewayConfiguration
     name: tyk-gw-oss
+    namespace: tyk
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway

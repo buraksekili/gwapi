@@ -18,21 +18,23 @@ package controller
 
 import (
 	"context"
+	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
-	"time"
-
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	"time"
 )
 
 // GatewayClassReconciler reconciles a GatewayClass object
 type GatewayClassReconciler struct {
 	Client client.Client
 	Scheme *runtime.Scheme
+	Log    logr.Logger
 }
 
 // <domain>/<name>
@@ -88,7 +90,42 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 // SetupWithManager sets up the controller with the Manager.
 func (r *GatewayClassReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		// Uncomment the following line adding a pointer to an instance of the controlled resource as an argument
 		For(&gwv1.GatewayClass{}).
+		//Watches(
+		//	&v1alpha1.GatewayConfiguration{},
+		//	handler.EnqueueRequestsFromMapFunc(r.listGatewayConfigurations),
+		//	builder.WithPredicates(
+		//		predicate.Funcs{
+		//			UpdateFunc: func(e event.UpdateEvent) bool {
+		//				if e.ObjectOld == nil {
+		//					r.Log.Error(nil, "Update event has no old object to update", "event", e)
+		//					return false
+		//				}
+		//				if e.ObjectNew == nil {
+		//					r.Log.Error(nil, "Update event has no new object to update", "event", e)
+		//					return false
+		//				}
+		//
+		//				labels := e.ObjectNew.GetLabels()
+		//				if labels == nil {
+		//					return false
+		//				}
+		//
+		//				val, ok := labels[tykManagedBy]
+		//				if ok && val == "tyk-operator" {
+		//					return true
+		//				}
+		//
+		//				return false
+		//			},
+		//		},
+		//	),
+		//).
 		Complete(r)
+}
+
+func (r *GatewayClassReconciler) listGatewayConfigurations(ctx context.Context, gwConfig client.Object) []reconcile.Request {
+	var requests []reconcile.Request
+
+	return requests
 }

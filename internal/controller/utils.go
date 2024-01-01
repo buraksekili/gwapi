@@ -10,7 +10,7 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
-func deployment(l logr.Logger, envs []v1.EnvVar, name string, labels, annotations map[gwv1.AnnotationKey]gwv1.AnnotationValue) appsv1.Deployment {
+func deployment(l logr.Logger, envs []v1.EnvVar, configMap *v1.ConfigMap, labels, annotations map[gwv1.AnnotationKey]gwv1.AnnotationValue) appsv1.Deployment {
 	replica := int32(1)
 	lpEnv := getEnv(envs, "TYK_GW_LISTENPORT")
 	if lpEnv.Name == "" {
@@ -26,7 +26,7 @@ func deployment(l logr.Logger, envs []v1.EnvVar, name string, labels, annotation
 
 	listenPort := int32(lp)
 
-	return appsv1.Deployment{
+	deploy := appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "tyk-gateway",
 			Namespace:   "default",
@@ -44,37 +44,59 @@ func deployment(l logr.Logger, envs []v1.EnvVar, name string, labels, annotation
 					Annotations: getRawMap(annotations),
 				},
 				Spec: v1.PodSpec{
-					Volumes: []v1.Volume{
-						{
-							Name: "config-volume",
-							VolumeSource: v1.VolumeSource{
-								ConfigMap: &v1.ConfigMapVolumeSource{
-									LocalObjectReference: v1.LocalObjectReference{
-										Name: name,
-									},
-								},
-							},
-						},
-					},
 					Containers: []v1.Container{
 						{
 							Name:  "tyk-gateway",
 							Image: "docker.tyk.io/tyk-gateway/tyk-gateway:v5.2.3",
 							Ports: []v1.ContainerPort{{ContainerPort: listenPort}},
 							Env:   envs,
-							VolumeMounts: []v1.VolumeMount{
-								{
-									Name:      "config-volume",
-									MountPath: "/etc/tyk-gateway",
-								},
-							},
 						},
 					},
 				},
 			},
 		},
 	}
+
+	if configMap != nil {
+		anns := deploy.GetAnnotations()
+		addToAnnotations(anns, "tyk.tyk.io/tyk-gateway-configmap-resourceVersion", configMap.ResourceVersion)
+		deploy.SetAnnotations(anns)
+
+		deploy.Spec.Template.Spec.Volumes = []v1.Volume{
+			{
+				Name: "config-volume",
+				VolumeSource: v1.VolumeSource{
+					ConfigMap: &v1.ConfigMapVolumeSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: configMap.ObjectMeta.Name,
+						},
+					},
+				},
+			},
+		}
+
+		deploy.Spec.Template.Spec.Containers[0].VolumeMounts = []v1.VolumeMount{
+			{
+				Name:      "config-volume",
+				MountPath: "/etc/tyk-gateway",
+			},
+		}
+	}
+
+	return deploy
 }
+
+func addToAnnotations(anns map[string]string, key, value string) map[string]string {
+	if anns == nil {
+		anns = make(map[string]string)
+	}
+
+	anns[key] = value
+
+	return anns
+}
+
+const indexedField = ".spec.tyk.configMapRef"
 
 // consider using json marshaling
 func getRawMap(data map[gwv1.AnnotationKey]gwv1.AnnotationValue) map[string]string {

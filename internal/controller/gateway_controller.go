@@ -21,14 +21,18 @@ import (
 	"fmt"
 	"github.com/buraksekili/gateway-api-tyk/api/v1alpha1"
 	"github.com/go-logr/logr"
+	v1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -115,17 +119,20 @@ func (r *GatewayReconciler) reconcileDelete(ctx context.Context, gw *gwv1.Gatewa
 	return ctrl.Result{}, nil
 }
 
+const tykManagedBy = "tyk.tyk.io/managed-by"
+
 func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gwv1.Gateway, conf v1alpha1.GatewayConfiguration) (ctrl.Result, error) {
 	controllerutil.AddFinalizer(gw, finalizer)
 
 	labels := map[gwv1.AnnotationKey]gwv1.AnnotationValue{}
-	labels["myoperator"] = "tyk"
 	annotations := map[gwv1.AnnotationKey]gwv1.AnnotationValue{}
 
 	if gw.Spec.Infrastructure != nil {
 		labels = gw.Spec.Infrastructure.Labels
 		annotations = gw.Spec.Infrastructure.Annotations
 	}
+
+	labels[tykManagedBy] = gwv1.AnnotationValue(fmt.Sprintf("%s-%s", gw.Namespace, gw.Name))
 
 	// Consider how to implement gw.Spec.Addresses
 
@@ -143,10 +150,23 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 		envs = append(envs, corev1.EnvVar{Name: "TYK_GW_LISTENPORT", Value: listenerPort.String()})
 	}
 
-	deploy := deployment(l, envs, conf.Spec.Tyk.ConfigMapRef.Name, labels, annotations)
+	tykConfigMap := &corev1.ConfigMap{}
+	if conf.Spec.Tyk.ConfigMapRef.Name != "" {
+		err := r.Client.Get(ctx, conf.Spec.Tyk.ConfigMapRef.NamespacedName(), tykConfigMap)
+		if err != nil {
+			// TODO: add events
+			return ctrl.Result{}, err
+		}
+	}
+
+	deploy := deployment(l, envs, tykConfigMap, labels, annotations)
 	deploy.Namespace = gw.Namespace
 
-	l.Info("prepared deployment", "deploy meta", deploy.ObjectMeta)
+	err := ctrl.SetControllerReference(gw, &deploy, r.Scheme)
+	if err != nil {
+		l.Info("Failed to update controller reference of the gateway deployment")
+		return ctrl.Result{}, err
+	}
 
 	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, &deploy, func() error {
 		return nil
@@ -164,7 +184,42 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 // SetupWithManager sets up the controller with the Manager.
 func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		// Uncomment the following line adding a pointer to an instance of the controlled resource as an argument
 		For(&gwv1.Gateway{}).
+		Owns(&v1.Deployment{}).
+		Watches(
+			&gwv1.GatewayClass{},
+			handler.EnqueueRequestsFromMapFunc(r.findGatewaysFromGatewayClass),
+			builder.WithPredicates(),
+		).
 		Complete(r)
+}
+
+func (r *GatewayReconciler) findGatewaysFromGatewayClass(ctx context.Context, gwClassObj client.Object) []reconcile.Request {
+	gwClass := gwClassObj.(*gwv1.GatewayClass)
+	if gwClass == nil {
+		return nil
+	}
+
+	if gwClass.Spec.ControllerName != controllerName {
+		return nil
+	}
+
+	gatewayList := &gwv1.GatewayList{}
+	if err := r.Client.List(ctx, gatewayList); err != nil {
+		fmt.Println("failed to list gatewaylists")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, gateway := range gatewayList.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      gateway.Name,
+				Namespace: gateway.Namespace,
+			},
+		})
+	}
+
+	// todo: metadata listing
+	return requests
 }
