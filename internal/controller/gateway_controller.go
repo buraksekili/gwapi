@@ -21,13 +21,12 @@ import (
 	"fmt"
 	"github.com/buraksekili/gateway-api-tyk/api/v1alpha1"
 	"github.com/go-logr/logr"
-	v1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -44,6 +43,8 @@ type GatewayReconciler struct {
 	Scheme *runtime.Scheme
 }
 
+//+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;create;update
+//+kubebuilder:rbac:groups=apps,resources=configmaps,verbs=get
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch;update
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=deployment,verbs=get;list;watch;update
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways/status,verbs=get;update
@@ -162,22 +163,17 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 	deploy := deployment(l, envs, tykConfigMap, labels, annotations)
 	deploy.Namespace = gw.Namespace
 
-	err := ctrl.SetControllerReference(gw, &deploy, r.Scheme)
-	if err != nil {
+	if err := ctrl.SetControllerReference(gw, &deploy, r.Scheme); err != nil {
 		l.Info("Failed to update controller reference of the gateway deployment")
 		return ctrl.Result{}, err
 	}
 
-	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, &deploy, func() error {
-		return nil
-	})
-
-	if err != nil {
-		l.Info("resource could not be created / updated", "result", result)
+	if err := r.createOrUpdate(ctx, &deploy); err != nil {
+		l.Error(err, "failed to create Tyk Gateway Deployment")
 		return ctrl.Result{}, err
 	}
 
-	l.Info("resource has created / updated", "result", result)
+	l.Info("resource has created / updated")
 	return ctrl.Result{}, nil
 }
 
@@ -185,11 +181,9 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&gwv1.Gateway{}).
-		Owns(&v1.Deployment{}).
 		Watches(
 			&gwv1.GatewayClass{},
 			handler.EnqueueRequestsFromMapFunc(r.findGatewaysFromGatewayClass),
-			builder.WithPredicates(),
 		).
 		Complete(r)
 }
@@ -222,4 +216,22 @@ func (r *GatewayReconciler) findGatewaysFromGatewayClass(ctx context.Context, gw
 
 	// todo: metadata listing
 	return requests
+}
+
+func (r *GatewayReconciler) createOrUpdate(ctx context.Context, object client.Object) error {
+	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(object), object); err != nil {
+		if !errors.IsNotFound(err) {
+			return err
+		}
+
+		if err := r.Client.Create(ctx, object); err != nil {
+			return err
+		}
+	}
+
+	if err := r.Client.Update(ctx, object); err != nil {
+		return err
+	}
+
+	return nil
 }

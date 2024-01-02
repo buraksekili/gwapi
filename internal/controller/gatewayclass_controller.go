@@ -18,13 +18,19 @@ package controller
 
 import (
 	"context"
+	"github.com/buraksekili/gateway-api-tyk/api/v1alpha1"
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	"time"
@@ -54,7 +60,7 @@ const controllerName = "buraksekili.github.com/gateway-api-controller-tyk"
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.16.3/pkg/reconcile
 func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	l := log.FromContext(ctx).WithValues("GatewayClass", req.String())
+	l := log.FromContext(ctx).WithValues("GatewayClass", req.Name)
 
 	l.Info("reconciling gateway class")
 
@@ -64,9 +70,40 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
+	if !gwClass.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
+	}
+
 	// can we handle it in predicate?
 	if gwClass.Spec.ControllerName != controllerName {
 		return ctrl.Result{}, nil
+	}
+
+	if gwClass.Spec.ParametersRef != nil {
+		ns := ""
+		if gwClass.Spec.ParametersRef.Namespace != nil {
+			ns = string(*gwClass.Spec.ParametersRef.Namespace)
+		}
+
+		gwConf := v1alpha1.GatewayConfiguration{}
+		if err := r.Client.Get(ctx, types.NamespacedName{Name: gwClass.Spec.ParametersRef.Name, Namespace: ns}, &gwConf); err != nil {
+			l.Info("failed to find GatewayConfiguration", "name", req.Name)
+			return ctrl.Result{}, nil
+		}
+
+		anns := gwClass.Annotations
+		if val, ok := anns["tyk.tyk.io/gatewayconfiguration-resourceversion"]; ok && val == gwConf.ResourceVersion {
+			l.Info("no need to update gwclass")
+		} else {
+			anns = addToAnnotations(anns, "tyk.tyk.io/gatewayconfiguration-resourceversion", gwConf.ResourceVersion)
+			gwClass.SetAnnotations(anns)
+
+			if err := r.Client.Update(ctx, gwClass); err != nil {
+				return ctrl.Result{}, err
+			}
+
+			return ctrl.Result{}, nil
+		}
 	}
 
 	// todo: no need to update whole status object
@@ -91,41 +128,59 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 func (r *GatewayClassReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&gwv1.GatewayClass{}).
-		//Watches(
-		//	&v1alpha1.GatewayConfiguration{},
-		//	handler.EnqueueRequestsFromMapFunc(r.listGatewayConfigurations),
-		//	builder.WithPredicates(
-		//		predicate.Funcs{
-		//			UpdateFunc: func(e event.UpdateEvent) bool {
-		//				if e.ObjectOld == nil {
-		//					r.Log.Error(nil, "Update event has no old object to update", "event", e)
-		//					return false
-		//				}
-		//				if e.ObjectNew == nil {
-		//					r.Log.Error(nil, "Update event has no new object to update", "event", e)
-		//					return false
-		//				}
-		//
-		//				labels := e.ObjectNew.GetLabels()
-		//				if labels == nil {
-		//					return false
-		//				}
-		//
-		//				val, ok := labels[tykManagedBy]
-		//				if ok && val == "tyk-operator" {
-		//					return true
-		//				}
-		//
-		//				return false
-		//			},
-		//		},
-		//	),
-		//).
+		Watches(
+			&v1alpha1.GatewayConfiguration{},
+			handler.EnqueueRequestsFromMapFunc(r.listGatewayConfigurations),
+			builder.WithPredicates(
+				predicate.Funcs{
+					DeleteFunc: func(deleteEvent event.DeleteEvent) bool {
+						return false
+					},
+					CreateFunc: func(createEvent event.CreateEvent) bool {
+						return false
+					},
+					UpdateFunc: func(e event.UpdateEvent) bool {
+						if e.ObjectOld == nil {
+							r.Log.Error(nil, "Update event has no old object to update", "event", e)
+							return false
+						}
+						if e.ObjectNew == nil {
+							r.Log.Error(nil, "Update event has no new object to update", "event", e)
+							return false
+						}
+
+						labels := e.ObjectNew.GetLabels()
+						if labels == nil {
+							return false
+						}
+
+						val, ok := labels[tykManagedBy]
+						if ok && val == "tyk-operator" {
+							return true
+						}
+
+						return false
+					},
+				},
+			),
+		).
+		WithEventFilter(predicate.Or(predicate.AnnotationChangedPredicate{}, predicate.GenerationChangedPredicate{})).
 		Complete(r)
 }
 
 func (r *GatewayClassReconciler) listGatewayConfigurations(ctx context.Context, gwConfig client.Object) []reconcile.Request {
 	var requests []reconcile.Request
+
+	gwClasses := &gwv1.GatewayClassList{}
+	if err := r.Client.List(ctx, gwClasses); err != nil {
+		return requests
+	}
+
+	for _, gwClass := range gwClasses.Items {
+		if gwClass.Spec.ControllerName == controllerName {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: gwClass.Name}})
+		}
+	}
 
 	return requests
 }

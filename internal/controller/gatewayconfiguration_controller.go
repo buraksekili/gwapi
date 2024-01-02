@@ -86,19 +86,6 @@ func (r *GatewayConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 
 		anns["tyk.tyk.io/tyk-gateway-configmap-resourceVersion"] = configMap.ResourceVersion
 		gwConfig.SetAnnotations(anns)
-
-		cmLabels := configMap.GetLabels()
-		if cmLabels == nil {
-			cmLabels = make(map[string]string)
-		}
-
-		cmLabels[tykManagedBy] = "tyk-operator"
-		configMap.SetLabels(cmLabels)
-
-		if err := r.Client.Update(ctx, &configMap); err != nil {
-			l.Error(err, "failed to update configMap")
-			return ctrl.Result{}, err
-		}
 	}
 
 	if err := r.Client.Update(ctx, gwConfig); err != nil {
@@ -128,7 +115,6 @@ func (r *GatewayConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) erro
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		// Uncomment the following line adding a pointer to an instance of the controlled resource as an argument
 		For(&v1alpha1.GatewayConfiguration{}).
 		Watches(
 			&v1.ConfigMap{},
