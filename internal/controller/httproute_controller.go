@@ -67,7 +67,7 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		for _, backend := range rule.BackendRefs {
 			proxy := tykApiModel.Proxy{TargetURL: generateTargetURL(req.Namespace, backend)}
 			for _, match := range rule.Matches {
-				apiDef := r.prepareApiDefinition(proxy, desired.ObjectMeta, rule, match)
+				apiDef := r.prepareApiDefinition(proxy, desired.ObjectMeta, rule, match, backend)
 
 				if err := controllerutil.SetOwnerReference(desired, &apiDef, r.Scheme); err != nil {
 					l.Error(err, "failed to set owner reference")
@@ -135,7 +135,7 @@ func (r *HTTPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *HTTPRouteReconciler) prepareApiDefinition(proxy tykApiModel.Proxy, meta metav1.ObjectMeta, rule v1.HTTPRouteRule, match v1.HTTPRouteMatch) v1alpha1.ApiDefinition {
+func (r *HTTPRouteReconciler) prepareApiDefinition(proxy tykApiModel.Proxy, meta metav1.ObjectMeta, rule v1.HTTPRouteRule, match v1.HTTPRouteMatch, backend v1.HTTPBackendRef) v1alpha1.ApiDefinition {
 	apiDef := v1alpha1.ApiDefinition{}
 
 	listenPath := "/"
@@ -152,15 +152,25 @@ func (r *HTTPRouteReconciler) prepareApiDefinition(proxy tykApiModel.Proxy, meta
 		}
 	}
 
+	namespace := meta.Namespace
+	if backend.Namespace != nil && *backend.Namespace != "" {
+		namespace = string(*backend.Namespace)
+	}
+
+	name = combine(name, string(backend.Name))
+	name = combine(name, namespace)
+
 	for _, ref := range rule.BackendRefs {
 		name = combine(name, string(ref.Name))
 	}
-	name = shortHash(name)
 
-	apiDef.ObjectMeta.Name = fmt.Sprintf("tyk-apidefinition-%s", name)
+	hashedName := shortHash(name)
+	resourceName := fmt.Sprintf("%s-%s-%s", namespace, backend.Name, hashedName)
+
+	apiDef.ObjectMeta.Name = resourceName
 	apiDef.ObjectMeta.Namespace = meta.Namespace
 
-	apiDef.Spec.Name = shortHash(name)
+	apiDef.Spec.Name = resourceName
 	apiDef.Spec.Proxy = proxy
 	apiDef.Spec.Proxy.ListenPath = &listenPath
 
