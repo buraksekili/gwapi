@@ -21,7 +21,9 @@ import (
 	"fmt"
 	"github.com/buraksekili/gateway-api-tyk/api/v1alpha1"
 	"github.com/go-logr/logr"
+	v1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -218,18 +220,23 @@ func (r *GatewayReconciler) findGatewaysFromGatewayClass(ctx context.Context, gw
 	return requests
 }
 
-func (r *GatewayReconciler) createOrUpdate(ctx context.Context, object client.Object) error {
-	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(object), object); err != nil {
+func (r *GatewayReconciler) createOrUpdate(ctx context.Context, deploy *v1.Deployment) error {
+	existingDeployment := deploy.DeepCopy()
+	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(existingDeployment), existingDeployment); err != nil {
 		if !errors.IsNotFound(err) {
 			return err
 		}
 
-		if err := r.Client.Create(ctx, object); err != nil {
+		if err := r.Client.Create(ctx, deploy); err != nil {
 			return err
 		}
 	}
 
-	if err := r.Client.Update(ctx, object); err != nil {
+	if equality.Semantic.DeepEqual(existingDeployment, deploy) {
+		return nil
+	}
+
+	if err := r.Client.Update(ctx, deploy); err != nil {
 		return err
 	}
 

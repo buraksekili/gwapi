@@ -58,9 +58,9 @@ func deployment(l logr.Logger, envs []v1.EnvVar, configMap *v1.ConfigMap, labels
 	}
 
 	if configMap != nil {
-		anns := deploy.GetAnnotations()
+		anns := deploy.Spec.Template.GetAnnotations()
 		addToAnnotations(anns, "tyk.tyk.io/tyk-gateway-configmap-resourceVersion", configMap.ResourceVersion)
-		deploy.SetAnnotations(anns)
+		deploy.Spec.Template.SetAnnotations(anns)
 
 		deploy.Spec.Template.Spec.Volumes = []v1.Volume{
 			{
