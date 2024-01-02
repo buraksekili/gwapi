@@ -11,8 +11,9 @@ spec:
   rules:
     - matches:
         - path:
-            type: PathPrefix
             value: /bar
+        - path:
+            value: /get
       backendRefs:
         - name: my-service1
           port: 8080

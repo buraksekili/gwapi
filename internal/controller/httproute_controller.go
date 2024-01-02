@@ -22,8 +22,6 @@ import (
 	"fmt"
 	tykApiModel "github.com/TykTechnologies/tyk-operator/api/model"
 	"github.com/TykTechnologies/tyk-operator/api/v1alpha1"
-	"k8s.io/apimachinery/pkg/api/equality"
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -75,7 +73,10 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 					return ctrl.Result{}, err
 				}
 
-				if err := r.createOrUpdate(ctx, &apiDef); err != nil {
+				_, err := controllerutil.CreateOrUpdate(ctx, r.Client, &apiDef, func() error {
+					return nil
+				})
+				if err != nil {
 					return ctrl.Result{}, err
 				}
 			}
@@ -83,29 +84,6 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	return ctrl.Result{}, nil
-}
-
-func (r *HTTPRouteReconciler) createOrUpdate(ctx context.Context, apiDef *v1alpha1.ApiDefinition) error {
-	existingDeployment := apiDef.DeepCopy()
-	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(existingDeployment), existingDeployment); err != nil {
-		if !errors.IsNotFound(err) {
-			return err
-		}
-
-		if err := r.Client.Create(ctx, apiDef); err != nil {
-			return err
-		}
-	}
-
-	if equality.Semantic.DeepEqual(existingDeployment, apiDef) {
-		return nil
-	}
-
-	if err := r.Client.Update(ctx, apiDef); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func generateTargetURL(ns string, backend v1.HTTPBackendRef) string {
