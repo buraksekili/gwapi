@@ -18,6 +18,15 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
+	tykApiModel "github.com/TykTechnologies/tyk-operator/api/model"
+	"github.com/TykTechnologies/tyk-operator/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	v1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -45,17 +54,159 @@ type HTTPRouteReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.16.3/pkg/reconcile
 func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	l := log.FromContext(ctx).WithValues("HTTPRoute", req.NamespacedName.String())
 
-	// TODO(user): your logic here
+	l.Info("reconciling HTTPRoute")
+
+	desired := &v1.HTTPRoute{}
+	if err := r.Client.Get(ctx, req.NamespacedName, desired); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	for _, rule := range desired.Spec.Rules {
+		for _, backend := range rule.BackendRefs {
+			proxy := tykApiModel.Proxy{TargetURL: generateTargetURL(req.Namespace, backend)}
+			for _, match := range rule.Matches {
+				apiDef := r.prepareApiDefinition(proxy, desired.ObjectMeta, rule, match)
+
+				if err := controllerutil.SetOwnerReference(desired, &apiDef, r.Scheme); err != nil {
+					l.Error(err, "failed to set owner reference")
+					return ctrl.Result{}, err
+				}
+
+				if err := r.createOrUpdate(ctx, &apiDef); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+		}
+	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *HTTPRouteReconciler) createOrUpdate(ctx context.Context, object client.Object) error {
+	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(object), object); err != nil {
+		if !errors.IsNotFound(err) {
+			return err
+		}
+
+		if err := r.Client.Create(ctx, object); err != nil {
+			return err
+		}
+	}
+
+	if err := r.Client.Update(ctx, object); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func generateTargetURL(ns string, backend v1.HTTPBackendRef) string {
+	// TODO: check if service exists, if not update status accordingly
+	// after getting the service, you can also know the service protocol. as of today, go with http
+	if !svcExists(backend) {
+		return ""
+	}
+
+	if backend.Namespace != nil && *backend.Namespace != "" {
+		// requires checking ReferenceGrant
+		ns = string(*backend.Namespace)
+	}
+
+	backendPort := int32(80)
+	if backend.Port != nil && *backend.Port != 0 {
+		backendPort = int32(*backend.Port)
+	}
+
+	return fmt.Sprintf("http://%s.%s.svc:%d", backend.Name, ns, backendPort)
+}
+
+func svcExists(backend v1.HTTPBackendRef) bool {
+	return true
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *HTTPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		// Uncomment the following line adding a pointer to an instance of the controlled resource as an argument
-		// For().
+		For(&v1.HTTPRoute{}).
+		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Complete(r)
+}
+
+func (r *HTTPRouteReconciler) prepareApiDefinition(proxy tykApiModel.Proxy, meta metav1.ObjectMeta, rule v1.HTTPRouteRule, match v1.HTTPRouteMatch) v1alpha1.ApiDefinition {
+	apiDef := v1alpha1.ApiDefinition{}
+
+	listenPath := "/"
+	name := fmt.Sprintf("%s/%s", meta.Name, meta.Namespace)
+	if match.Path == nil {
+		name = fmt.Sprintf("%s/%s", name, "generaterandomstring")
+	} else {
+		if match.Path.Value != nil {
+			name = combine(name, *match.Path.Value)
+			listenPath = *match.Path.Value
+		}
+		if match.Path.Type != nil {
+			name = combine(name, string(*match.Path.Type))
+		}
+	}
+
+	for _, ref := range rule.BackendRefs {
+		name = combine(name, string(ref.Name))
+	}
+	name = shortHash(name)
+
+	apiDef.ObjectMeta.Name = fmt.Sprintf("tyk-apidefinition-%s", name)
+	apiDef.ObjectMeta.Namespace = meta.Namespace
+
+	apiDef.Spec.Name = shortHash(name)
+	apiDef.Spec.Proxy = proxy
+	apiDef.Spec.Proxy.ListenPath = &listenPath
+
+	active := true
+	apiDef.Spec.Active = &active
+
+	return apiDef
+}
+
+func combine(base string, additions ...string) string {
+	for _, addition := range additions {
+		base = fmt.Sprintf("%s/%s", base, addition)
+	}
+
+	return base
+}
+
+func shortHash(txt string) string {
+	h := sha256.New()
+	h.Write([]byte(txt))
+
+	return fmt.Sprintf("%x", h.Sum(nil))[:9]
+}
+
+func generateApiName(route *v1.HTTPRoute, match v1.HTTPRouteMatch) string {
+	/*
+		1- route.Namespace / route.name
+		2- if no field specified
+			generate-random-stuff as follows;
+				"<namespace>/<name>/<random>"
+		3- Ifj
+	*/
+
+	/*
+		no need to take parentsRef name into consideration while generating a name for ApiDefinition since
+		i do not know from httproute_controller that which parentRef reflects to Tyk Gateway.
+	*/
+
+	// default value for `match.Path` is "/"
+
+	combined := []string{}
+	if match.Path != nil {
+		if match.Path.Value != nil {
+			combined = append(combined, *match.Path.Value)
+		}
+	}
+
+	return ""
 }

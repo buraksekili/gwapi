@@ -18,6 +18,7 @@ package main
 
 import (
 	"flag"
+	"github.com/TykTechnologies/tyk-operator/api/v1alpha1"
 	"os"
 
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -51,6 +52,7 @@ func init() {
 	utilruntime.Must(tykgatewayv1.AddToScheme(scheme))
 	utilruntime.Must(gwv1.AddToScheme(scheme))
 	utilruntime.Must(tykgwv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(v1alpha1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
@@ -109,13 +111,13 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "GatewayClass")
 		os.Exit(1)
 	}
-	//if err = (&controller.HTTPRouteReconciler{
-	//	Client: mgr.GetClient(),
-	//	Scheme: mgr.GetScheme(),
-	//}).SetupWithManager(mgr); err != nil {
-	//	setupLog.Error(err, "unable to create controller", "controller", "HTTPRoute")
-	//	os.Exit(1)
-	//}
+	if err = (&controller.HTTPRouteReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "HTTPRoute")
+		os.Exit(1)
+	}
 	if err = (&controller.GatewayConfigurationReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
