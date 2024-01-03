@@ -111,6 +111,10 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 }
 
 func validParameters(ref *gwv1.ParametersReference) bool {
+	if ref == nil {
+		return false
+	}
+
 	return ref.Name != "" && ref.Group == "gateway" && ref.Kind == "GatewayConfiguration"
 }
 

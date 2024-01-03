@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"github.com/buraksekili/gateway-api-tyk/api/v1alpha1"
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
@@ -70,16 +71,21 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
-	if !gwClass.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, nil
-	}
-
 	// can we handle it in predicate?
 	if gwClass.Spec.ControllerName != controllerName {
 		return ctrl.Result{}, nil
 	}
 
+	if !gwClass.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
+	}
+
 	if gwClass.Spec.ParametersRef != nil {
+		if !validParameters(gwClass.Spec.ParametersRef) {
+			// TODO: add event record
+			// TODO: updated status
+			return ctrl.Result{}, fmt.Errorf("invalid paramaters ref in GatewayClass")
+		}
 		ns := ""
 		if gwClass.Spec.ParametersRef.Namespace != nil {
 			ns = string(*gwClass.Spec.ParametersRef.Namespace)
@@ -178,7 +184,9 @@ func (r *GatewayClassReconciler) listGatewayConfigurations(ctx context.Context, 
 
 	for _, gwClass := range gwClasses.Items {
 		if gwClass.Spec.ControllerName == controllerName {
-			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: gwClass.Name}})
+			if validParameters(gwClass.Spec.ParametersRef) {
+				requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: gwClass.Name}})
+			}
 		}
 	}
 
