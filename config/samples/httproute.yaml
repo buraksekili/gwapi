@@ -10,12 +10,12 @@ spec:
     - "foo.com"
   rules:
     - matches:
-        - path:
-            value: /bar
-        - path:
-            value: /get
+      - path:
+          value: /bar
+      - path:
+          value: /get
       backendRefs:
-        - name: my-service1
-          port: 8080
-        - name: my-service2
-          port: 8080
+      - name: my-service1
+        port: 8080
+      - name: my-service2
+        port: 8080
