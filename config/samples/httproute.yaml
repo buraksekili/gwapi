@@ -5,7 +5,7 @@ metadata:
   namespace: tyk
 spec:
   parentRefs:
-    - name: tyk-gateway
+    - name: tyk-gateway # It means Gateway resource named tyk/tyk-gateway from gateway.networking.k8s.io
   hostnames:
     - "foo.com"
   rules:
