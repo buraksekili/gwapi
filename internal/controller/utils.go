@@ -61,7 +61,7 @@ func deployment(l logr.Logger, envs []v1.EnvVar, configMap *v1.ConfigMap, labels
 
 	if configMap != nil {
 		anns := deploy.Spec.Template.GetAnnotations()
-		addToAnnotations(anns, "tyk.tyk.io/tyk-gateway-configmap-resourceVersion", configMap.ResourceVersion)
+		addToAnnotations(anns, ConfigMapResourceVersionAnnKey, configMap.ResourceVersion)
 		deploy.Spec.Template.SetAnnotations(anns)
 
 		deploy.Spec.Template.Spec.Volumes = []v1.Volume{
@@ -80,7 +80,8 @@ func deployment(l logr.Logger, envs []v1.EnvVar, configMap *v1.ConfigMap, labels
 		deploy.Spec.Template.Spec.Containers[0].VolumeMounts = []v1.VolumeMount{
 			{
 				Name:      "config-volume",
-				MountPath: "/etc/tyk-gateway",
+				MountPath: "/opt/tyk-gateway/tyk.conf",
+				SubPath:   "tyk.conf",
 			},
 		}
 	}
