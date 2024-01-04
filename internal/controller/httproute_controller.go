@@ -62,18 +62,35 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	if err := validRouteParentRefs(desired.Spec.ParentRefs); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	for _, rule := range desired.Spec.Rules {
 		for _, backend := range rule.BackendRefs {
-			proxy := tykApiModel.Proxy{TargetURL: generateTargetURL(req.Namespace, backend)}
+			api := v1alpha1.ApiDefinition{
+				ObjectMeta: metav1.ObjectMeta{},
+				Spec: v1alpha1.APIDefinitionSpec{
+					APIDefinitionSpec: tykApiModel.APIDefinitionSpec{
+						Proxy: tykApiModel.Proxy{TargetURL: generateTargetURL(req.Namespace, backend)},
+					},
+				},
+			}
 			for _, match := range rule.Matches {
-				apiDef := r.prepareApiDefinition(proxy, desired.ObjectMeta, rule, match, backend)
-
-				if err := controllerutil.SetOwnerReference(desired, &apiDef, r.Scheme); err != nil {
-					l.Error(err, "failed to set owner reference")
-					return ctrl.Result{}, err
+				apiDef := api
+				apiDef.ObjectMeta = metav1.ObjectMeta{
+					Name:      generateApiName(desired.ObjectMeta, match, backend, rule),
+					Namespace: desired.Namespace,
 				}
 
 				_, err := controllerutil.CreateOrUpdate(ctx, r.Client, &apiDef, func() error {
+					if err := controllerutil.SetOwnerReference(desired, &apiDef, r.Scheme); err != nil {
+						l.Error(err, "failed to set owner reference")
+						return err
+					}
+
+					reconcileApiDefinition(&apiDef, match)
+
 					return nil
 				})
 				if err != nil {
@@ -84,6 +101,16 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func validRouteParentRefs(refs []v1.ParentReference) error {
+	for i := range refs {
+		if refs[i].Kind != nil && *refs[i].Kind != "Gateway" {
+			return fmt.Errorf("invalid kind for HTTPRoute, expected Gateway got %v", *refs[i].Kind)
+		}
+	}
+
+	return nil
 }
 
 func generateTargetURL(ns string, backend v1.HTTPBackendRef) string {
@@ -119,17 +146,45 @@ func (r *HTTPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *HTTPRouteReconciler) prepareApiDefinition(proxy tykApiModel.Proxy, meta metav1.ObjectMeta, rule v1.HTTPRouteRule, match v1.HTTPRouteMatch, backend v1.HTTPBackendRef) v1alpha1.ApiDefinition {
-	apiDef := v1alpha1.ApiDefinition{}
+func reconcileApiDefinition(apiDef *v1alpha1.ApiDefinition, match v1.HTTPRouteMatch) {
+	apiDef.Spec.Name = apiDef.Name
 
-	listenPath := "/"
+	lp := listenPath(match.Path)
+	apiDef.Spec.Proxy.ListenPath = &lp
+
+	active := true
+	apiDef.Spec.Active = &active
+}
+
+func listenPath(path *v1.HTTPPathMatch) string {
+	if path == nil || path.Value == nil {
+		return "/"
+	}
+
+	return *path.Value
+}
+
+func generateApiName(meta metav1.ObjectMeta, match v1.HTTPRouteMatch, backend v1.HTTPBackendRef, rule v1.HTTPRouteRule) string {
+	/*
+		1- route.Namespace / route.name
+		2- if no field specified
+			generate-random-stuff as follows;
+				"<namespace>/<name>/<random>"
+		3- Ifj
+	*/
+
+	/*
+		no need to take parentsRef name into consideration while generating a name for ApiDefinition since
+		i do not know from httproute_controller that which parentRef reflects to Tyk Gateway.
+	*/
+
 	name := fmt.Sprintf("%s/%s", meta.Name, meta.Namespace)
 	if match.Path == nil {
+		// TODO: generate random string here
 		name = fmt.Sprintf("%s/%s", name, "generaterandomstring")
 	} else {
 		if match.Path.Value != nil {
 			name = combine(name, *match.Path.Value)
-			listenPath = *match.Path.Value
 		}
 		if match.Path.Type != nil {
 			name = combine(name, string(*match.Path.Type))
@@ -150,18 +205,7 @@ func (r *HTTPRouteReconciler) prepareApiDefinition(proxy tykApiModel.Proxy, meta
 
 	hashedName := shortHash(name)
 	resourceName := fmt.Sprintf("%s-%s-%s", namespace, backend.Name, hashedName)
-
-	apiDef.ObjectMeta.Name = resourceName
-	apiDef.ObjectMeta.Namespace = meta.Namespace
-
-	apiDef.Spec.Name = resourceName
-	apiDef.Spec.Proxy = proxy
-	apiDef.Spec.Proxy.ListenPath = &listenPath
-
-	active := true
-	apiDef.Spec.Active = &active
-
-	return apiDef
+	return resourceName
 }
 
 func combine(base string, additions ...string) string {
@@ -177,30 +221,4 @@ func shortHash(txt string) string {
 	h.Write([]byte(txt))
 
 	return fmt.Sprintf("%x", h.Sum(nil))[:9]
-}
-
-func generateApiName(route *v1.HTTPRoute, match v1.HTTPRouteMatch) string {
-	/*
-		1- route.Namespace / route.name
-		2- if no field specified
-			generate-random-stuff as follows;
-				"<namespace>/<name>/<random>"
-		3- Ifj
-	*/
-
-	/*
-		no need to take parentsRef name into consideration while generating a name for ApiDefinition since
-		i do not know from httproute_controller that which parentRef reflects to Tyk Gateway.
-	*/
-
-	// default value for `match.Path` is "/"
-
-	combined := []string{}
-	if match.Path != nil {
-		if match.Path.Value != nil {
-			combined = append(combined, *match.Path.Value)
-		}
-	}
-
-	return ""
 }
