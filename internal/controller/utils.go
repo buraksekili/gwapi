@@ -1,13 +1,14 @@
 package controller
 
 import (
-	"strconv"
-
 	"github.com/go-logr/logr"
+	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	"strconv"
 )
 
 func deployment(l logr.Logger, envs []v1.EnvVar, configMap *v1.ConfigMap, labels, annotations map[gwv1.AnnotationKey]gwv1.AnnotationValue) appsv1.Deployment {
@@ -96,8 +97,6 @@ func addToAnnotations(anns map[string]string, key, value string) map[string]stri
 	return anns
 }
 
-const indexedField = ".spec.tyk.configMapRef"
-
 // consider using json marshaling
 func getRawMap(data map[gwv1.AnnotationKey]gwv1.AnnotationValue) map[string]string {
 	d := make(map[string]string)
@@ -116,4 +115,24 @@ func getEnv(envs []v1.EnvVar, envName string) v1.EnvVar {
 	}
 
 	return v1.EnvVar{}
+}
+
+var (
+	ErrNilGWClass = errors.New("Invalid Gateway Class provided; nil value")
+)
+
+func setGwClassConditionAccepted(gwClass *gwv1.GatewayClass) error {
+	if gwClass == nil {
+		return ErrNilGWClass
+	}
+
+	meta.SetStatusCondition(&gwClass.Status.Conditions, metav1.Condition{
+		Type:               string(gwv1.GatewayClassConditionStatusAccepted),
+		ObservedGeneration: gwClass.Generation,
+		Status:             "True",
+		Message:            string(gwv1.GatewayClassReasonAccepted),
+		Reason:             string(gwv1.GatewayClassReasonAccepted),
+	})
+
+	return nil
 }

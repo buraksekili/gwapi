@@ -22,9 +22,10 @@ import (
 	"github.com/buraksekili/gateway-api-tyk/api/v1alpha1"
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,14 +35,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
-	"time"
 )
 
 // GatewayClassReconciler reconciles a GatewayClass object
 type GatewayClassReconciler struct {
-	Client client.Client
-	Scheme *runtime.Scheme
-	Log    logr.Logger
+	Client   client.Client
+	Scheme   *runtime.Scheme
+	Log      logr.Logger
+	Recorder record.EventRecorder
 }
 
 // <domain>/<name>
@@ -61,18 +62,24 @@ const controllerName = "buraksekili.github.com/gateway-api-controller-tyk"
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.16.3/pkg/reconcile
 func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	// TODO: check why we have two gatewayclass field in the logs
 	l := log.FromContext(ctx).WithValues("GatewayClass", req.Name)
 
-	l.Info("reconciling gateway class")
+	l.Info("Reconciling GatewayClass")
 
 	gwClass := &gwv1.GatewayClass{}
 	if err := r.Client.Get(ctx, req.NamespacedName, gwClass); err != nil {
-		l.Info("gateway not found", "name", req.Name)
-		return ctrl.Result{}, nil
+		l.Info("GatewayClass not found", "name", req.Name)
+
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// can we handle it in predicate?
 	if gwClass.Spec.ControllerName != controllerName {
+		l.Info(
+			"Ignore GatewayClass resources with different controller names",
+			"controllerName", gwClass.Spec.ControllerName,
+		)
+
 		return ctrl.Result{}, nil
 	}
 
@@ -82,10 +89,13 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	if gwClass.Spec.ParametersRef != nil {
 		if !validParameters(gwClass.Spec.ParametersRef) {
-			// TODO: add event record
-			// TODO: updated status
+			r.Recorder.Eventf(gwClass, v1.EventTypeWarning, GWClassInvalidParametersRef,
+				"invalid ParametersRef provided for controllerName: %s", controllerName,
+			)
+
 			return ctrl.Result{}, fmt.Errorf("invalid paramaters ref in GatewayClass")
 		}
+
 		ns := ""
 		if gwClass.Spec.ParametersRef.Namespace != nil {
 			ns = string(*gwClass.Spec.ParametersRef.Namespace)
@@ -93,15 +103,20 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 		gwConf := v1alpha1.GatewayConfiguration{}
 		if err := r.Client.Get(ctx, types.NamespacedName{Name: gwClass.Spec.ParametersRef.Name, Namespace: ns}, &gwConf); err != nil {
-			l.Info("failed to find GatewayConfiguration", "name", req.Name)
+			l.Info(
+				"failed to find GatewayConfiguration",
+				"GatewayConfiguration Name", gwClass.Spec.ParametersRef.Name,
+				"GatewayConfiguration Namespace", ns,
+			)
+
 			return ctrl.Result{}, nil
 		}
 
 		anns := gwClass.Annotations
-		if val, ok := anns["tyk.tyk.io/gatewayconfiguration-resourceversion"]; ok && val == gwConf.ResourceVersion {
-			l.Info("no need to update gwclass")
+		if val, ok := anns[GWClassGWConfigurationAnnKey]; ok && val == gwConf.ResourceVersion {
+			l.Info("no need to update GatewayClass annotations")
 		} else {
-			anns = addToAnnotations(anns, "tyk.tyk.io/gatewayconfiguration-resourceversion", gwConf.ResourceVersion)
+			anns = addToAnnotations(anns, GWClassGWConfigurationAnnKey, gwConf.ResourceVersion)
 			gwClass.SetAnnotations(anns)
 
 			if err := r.Client.Update(ctx, gwClass); err != nil {
@@ -112,20 +127,28 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
-	// todo: no need to update whole status object
-	gwClassOld := gwClass.DeepCopy()
-	gwClass.Status.Conditions[0].LastTransitionTime = metav1.NewTime(time.Now())
-	gwClass.Status.Conditions[0].ObservedGeneration = gwClass.Generation
-	gwClass.Status.Conditions[0].Status = "True"
-	gwClass.Status.Conditions[0].Message = string(gwv1.GatewayClassReasonAccepted)
-	gwClass.Status.Conditions[0].Reason = string(gwv1.GatewayClassReasonAccepted)
+	if err := setGwClassConditionAccepted(gwClass); err != nil {
+		r.Recorder.Event(gwClass, v1.EventTypeWarning, GWClassFailedToSetAcceptedStatus,
+			"failed to set GatewayClass Status Condition",
+		)
+		l.Error(err, "failed to set GatewayClass status conditions")
 
-	if err := r.Client.Status().Patch(ctx, gwClass, client.MergeFrom(gwClassOld)); err != nil {
-		l.Info("failed to reconcile gw class")
-		return ctrl.Result{}, errors.Wrapf(err, "failed to update gatewayclass status")
+		return ctrl.Result{}, err
 	}
 
-	l.Info("reconciled gw class successfully")
+	if err := r.Client.Status().Update(ctx, gwClass); err != nil {
+		//if err := r.Client.Status().Patch(ctx, gwClass, client.MergeFrom(gwClass.DeepCopy())); err != nil {
+		// TODO: do we need to print error here as returning error also prints out the error logs.
+		r.Recorder.Event(gwClass, v1.EventTypeWarning, FailedToUpdateStatus,
+			"failed to update GatewayClass Status",
+		)
+
+		l.Error(err, "failed to patch GatewayClass status")
+
+		return ctrl.Result{}, errors.Wrapf(err, "failed to patch gatewayclass status")
+	}
+
+	l.Info("reconciled GatewayClass successfully")
 
 	return ctrl.Result{}, nil
 }

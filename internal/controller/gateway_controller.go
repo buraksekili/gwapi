@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -41,8 +42,9 @@ const finalizer = "finalizers.buraksekili.github.io/gateway-api-tyk"
 
 // GatewayReconciler reconciles a Gateway object
 type GatewayReconciler struct {
-	Client client.Client
-	Scheme *runtime.Scheme
+	Client   client.Client
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;create;update
@@ -112,7 +114,7 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 func validParameters(ref *gwv1.ParametersReference) bool {
 	if ref == nil {
-		return false
+		return true
 	}
 
 	return ref.Name != "" && ref.Group == "gateway" && ref.Kind == "GatewayConfiguration"
