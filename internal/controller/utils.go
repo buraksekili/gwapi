@@ -7,12 +7,49 @@ import (
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	"strconv"
 )
 
-func deployment(l logr.Logger, envs []v1.EnvVar, configMap *v1.ConfigMap, labels, annotations map[gwv1.AnnotationKey]gwv1.AnnotationValue) appsv1.Deployment {
+func service(svc *v1.Service, deployments *appsv1.Deployment) {
+	if deployments == nil || svc == nil {
+		return
+	}
+
+	targetPort := intstr.IntOrString{Type: intstr.Int}
+	for _, container := range deployments.Spec.Template.Spec.Containers {
+		lpEnv := getEnv(container.Env, "TYK_GW_LISTENPORT")
+		if lpEnv.Name == "" {
+			lpEnv = v1.EnvVar{Name: "TYK_GW_LISTENPORT", Value: "8080"}
+		}
+
+		lp, err := strconv.Atoi(lpEnv.Value)
+		if err != nil {
+			lp = 8080
+		}
+
+		targetPort.IntVal = int32(lp)
+	}
+
+	svc.Spec = v1.ServiceSpec{
+		Selector: deployments.Spec.Template.ObjectMeta.Labels,
+		Ports: []v1.ServicePort{
+			{
+				Protocol:   v1.ProtocolTCP,
+				Port:       8080,
+				TargetPort: targetPort,
+			},
+		},
+	}
+}
+
+func deployment(l logr.Logger, deploy *appsv1.Deployment, envs []v1.EnvVar, configMap *v1.ConfigMap) {
+	if deploy == nil {
+		return
+	}
+
 	replica := int32(1)
 	lpEnv := getEnv(envs, "TYK_GW_LISTENPORT")
 	if lpEnv.Name == "" {
@@ -28,31 +65,23 @@ func deployment(l logr.Logger, envs []v1.EnvVar, configMap *v1.ConfigMap, labels
 
 	listenPort := int32(lp)
 
-	deploy := appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        "tyk-gateway",
-			Namespace:   "default",
-			Labels:      getRawMap(labels),
-			Annotations: getRawMap(annotations),
+	deploy.Spec = appsv1.DeploymentSpec{
+		Replicas: &replica,
+		Selector: &metav1.LabelSelector{
+			MatchLabels: deploy.Labels,
 		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: &replica,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: getRawMap(labels),
+		Template: v1.PodTemplateSpec{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels:      deploy.Labels,
+				Annotations: deploy.Annotations,
 			},
-			Template: v1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels:      getRawMap(labels),
-					Annotations: getRawMap(annotations),
-				},
-				Spec: v1.PodSpec{
-					Containers: []v1.Container{
-						{
-							Name:  "tyk-gateway",
-							Image: "docker.tyk.io/tyk-gateway/tyk-gateway:v5.2.3",
-							Ports: []v1.ContainerPort{{ContainerPort: listenPort}},
-							Env:   envs,
-						},
+			Spec: v1.PodSpec{
+				Containers: []v1.Container{
+					{
+						Name:  "tyk-gateway",
+						Image: "docker.tyk.io/tyk-gateway/tyk-gateway:v5.2.3",
+						Ports: []v1.ContainerPort{{ContainerPort: listenPort}},
+						Env:   envs,
 					},
 				},
 			},
@@ -85,8 +114,6 @@ func deployment(l logr.Logger, envs []v1.EnvVar, configMap *v1.ConfigMap, labels
 			},
 		}
 	}
-
-	return deploy
 }
 
 func addToAnnotations(anns map[string]string, key, value string) map[string]string {

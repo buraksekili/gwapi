@@ -23,8 +23,7 @@ import (
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
-	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -160,20 +159,46 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 		}
 	}
 
-	deploy := deployment(l, envs, tykConfigMap, labels, annotations)
-	deploy.Namespace = gw.Namespace
-
-	if err := ctrl.SetControllerReference(gw, &deploy, r.Scheme); err != nil {
-		l.Info("Failed to update controller reference of the gateway deployment")
-		return ctrl.Result{}, err
+	deploy := v1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "tyk-gateway",
+			Namespace:   gw.Namespace,
+			Labels:      getRawMap(labels),
+			Annotations: getRawMap(annotations),
+		},
 	}
 
-	if err := r.createOrUpdate(ctx, &deploy); err != nil {
+	err := r.createOrUpdate(ctx, &deploy, func() error {
+		if err := ctrl.SetControllerReference(gw, &deploy, r.Scheme); err != nil {
+			l.Info("Failed to update controller reference of the gateway deployment")
+			return err
+		}
+
+		deployment(l, &deploy, envs, tykConfigMap)
+		return nil
+	})
+	if err != nil {
 		l.Error(err, "failed to create Tyk Gateway Deployment")
 		return ctrl.Result{}, err
 	}
 
-	l.Info("resource has created / updated")
+	l.Info("Tyk Gateway Deployment has created / updated")
+
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "tyk-gateway-service", Namespace: gw.Namespace}}
+	err = r.createOrUpdate(ctx, svc, func() error {
+		if err = ctrl.SetControllerReference(gw, svc, r.Scheme); err != nil {
+			l.Info("Failed to update controller reference of the gateway deployment")
+			return err
+		}
+
+		service(svc, &deploy)
+		return nil
+	})
+	if err != nil {
+		l.Error(err, "failed to create Tyk Gateway Deployment")
+		return ctrl.Result{}, err
+	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -218,25 +243,7 @@ func (r *GatewayReconciler) findGatewaysFromGatewayClass(ctx context.Context, gw
 	return requests
 }
 
-func (r *GatewayReconciler) createOrUpdate(ctx context.Context, deploy *v1.Deployment) error {
-	existingDeployment := deploy.DeepCopy()
-	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(existingDeployment), existingDeployment); err != nil {
-		if !errors.IsNotFound(err) {
-			return err
-		}
-
-		if err := r.Client.Create(ctx, deploy); err != nil {
-			return err
-		}
-	}
-
-	if equality.Semantic.DeepEqual(existingDeployment, deploy) {
-		return nil
-	}
-
-	if err := r.Client.Update(ctx, deploy); err != nil {
-		return err
-	}
-
-	return nil
+func (r *GatewayReconciler) createOrUpdate(ctx context.Context, object client.Object, fn controllerutil.MutateFn) error {
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, object, fn)
+	return err
 }
