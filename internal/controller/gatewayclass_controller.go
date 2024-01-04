@@ -87,44 +87,8 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
-	if gwClass.Spec.ParametersRef != nil {
-		if !validParameters(gwClass.Spec.ParametersRef) {
-			r.Recorder.Eventf(gwClass, v1.EventTypeWarning, GWClassInvalidParametersRef,
-				"invalid ParametersRef provided for controllerName: %s", controllerName,
-			)
-
-			return ctrl.Result{}, fmt.Errorf("invalid paramaters ref in GatewayClass")
-		}
-
-		ns := ""
-		if gwClass.Spec.ParametersRef.Namespace != nil {
-			ns = string(*gwClass.Spec.ParametersRef.Namespace)
-		}
-
-		gwConf := v1alpha1.GatewayConfiguration{}
-		if err := r.Client.Get(ctx, types.NamespacedName{Name: gwClass.Spec.ParametersRef.Name, Namespace: ns}, &gwConf); err != nil {
-			l.Info(
-				"failed to find GatewayConfiguration",
-				"GatewayConfiguration Name", gwClass.Spec.ParametersRef.Name,
-				"GatewayConfiguration Namespace", ns,
-			)
-
-			return ctrl.Result{}, nil
-		}
-
-		anns := gwClass.Annotations
-		if val, ok := anns[GWClassGWConfigurationAnnKey]; ok && val == gwConf.ResourceVersion {
-			l.Info("no need to update GatewayClass annotations")
-		} else {
-			anns = addToAnnotations(anns, GWClassGWConfigurationAnnKey, gwConf.ResourceVersion)
-			gwClass.SetAnnotations(anns)
-
-			if err := r.Client.Update(ctx, gwClass); err != nil {
-				return ctrl.Result{}, err
-			}
-
-			return ctrl.Result{}, nil
-		}
+	if err := r.processParametersRef(ctx, l, gwClass); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if err := setGwClassConditionAccepted(gwClass); err != nil {
@@ -207,11 +171,50 @@ func (r *GatewayClassReconciler) listGatewayConfigurations(ctx context.Context, 
 
 	for _, gwClass := range gwClasses.Items {
 		if gwClass.Spec.ControllerName == controllerName {
-			if validParameters(gwClass.Spec.ParametersRef) {
+			if validParametersRef(gwClass.Spec.ParametersRef) {
 				requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: gwClass.Name}})
 			}
 		}
 	}
 
 	return requests
+}
+
+func (r *GatewayClassReconciler) processParametersRef(ctx context.Context, l logr.Logger, gwClass *gwv1.GatewayClass) error {
+	if gwClass.Spec.ParametersRef == nil {
+		return nil
+	}
+
+	// Check if parameters ref is valid or not
+	if !validParametersRef(gwClass.Spec.ParametersRef) {
+		r.Recorder.Eventf(gwClass, v1.EventTypeWarning, GWClassInvalidParametersRef,
+			"invalid ParametersRef provided for controllerName: %s", controllerName,
+		)
+
+		return fmt.Errorf("invalid paramaters ref in GatewayClass")
+	}
+
+	ns := ""
+	if gwClass.Spec.ParametersRef.Namespace != nil {
+		ns = string(*gwClass.Spec.ParametersRef.Namespace)
+	}
+
+	gwConf := v1alpha1.GatewayConfiguration{}
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: gwClass.Spec.ParametersRef.Name, Namespace: ns}, &gwConf); err != nil {
+		l.Info(
+			"failed to find GatewayConfiguration",
+			"GatewayConfiguration Name", gwClass.Spec.ParametersRef.Name,
+			"GatewayConfiguration Namespace", ns,
+		)
+
+		return nil
+	}
+
+	if res := updateAnnototation(gwClass, GWConfigurationResourceVersionAnnKey, gwConf.ResourceVersion); res == mapUpdated {
+		if err := r.Client.Update(ctx, gwClass); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

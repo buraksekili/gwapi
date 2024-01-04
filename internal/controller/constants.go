@@ -9,5 +9,6 @@ const (
 	// ===========
 	// Annotations
 	// ===========
-	GWClassGWConfigurationAnnKey = "tyk.tyk.io/gatewayconfiguration-resourceversion"
+	GWConfigurationResourceVersionAnnKey = "tyk.tyk.io/gatewayconfiguration-resourceversion"
+	ConfigMapResourceVersionAnnKey       = "tyk.tyk.io/tyk-gateway-configmap-resourceVersion"
 )

@@ -7,6 +7,7 @@ import (
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	"strconv"
 )
@@ -135,4 +136,59 @@ func setGwClassConditionAccepted(gwClass *gwv1.GatewayClass) error {
 	})
 
 	return nil
+}
+
+func validParametersRef(ref *gwv1.ParametersReference) bool {
+	if ref == nil {
+		return true
+	}
+
+	return ref.Name != "" && ref.Group == "gateway" && ref.Kind == "GatewayConfiguration"
+}
+
+type updateResults string
+
+const (
+	mapUnchanged updateResults = "unchanged"
+	mapUpdated   updateResults = "updated"
+)
+
+func updateAnnototation(object client.Object, key, val string) updateResults {
+	if object == nil {
+		return mapUnchanged
+	}
+
+	anns := object.GetAnnotations()
+	if anns == nil {
+		anns = make(map[string]string)
+	}
+
+	existingVal, ok := anns[key]
+	if !ok || existingVal != val {
+		anns[key] = val
+		object.SetAnnotations(anns)
+		return mapUpdated
+	}
+
+	return mapUnchanged
+}
+
+func updateLabels(object client.Object, key, val string) updateResults {
+	if object == nil {
+		return mapUnchanged
+	}
+
+	labels := object.GetLabels()
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+
+	existingVal, ok := labels[key]
+	if !ok || existingVal != val {
+		labels[key] = val
+		object.SetLabels(labels)
+		return mapUpdated
+	}
+
+	return mapUnchanged
 }

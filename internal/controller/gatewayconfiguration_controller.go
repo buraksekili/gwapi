@@ -56,40 +56,23 @@ func (r *GatewayConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 
 	gwConfig := &v1alpha1.GatewayConfiguration{}
 	if err := r.Client.Get(ctx, req.NamespacedName, gwConfig); err != nil {
-		l.Info("gateway not found", "name", req.Name)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	labels := gwConfig.GetLabels()
-	if labels == nil {
-		labels = make(map[string]string)
-	}
-
-	// TODO: no need to run update if there is no change
-
-	labels[tykManagedBy] = "tyk-operator"
-	gwConfig.SetLabels(labels)
-
+	annsUpdated, labelsUpdated := mapUnchanged, mapUnchanged
 	if gwConfig.Spec.Tyk.ConfigMapRef.Name != "" {
 		configMap := v1.ConfigMap{}
-
-		err := r.Client.Get(ctx, gwConfig.Spec.Tyk.ConfigMapRef.NamespacedName(), &configMap)
-		if err != nil {
+		if err := r.Client.Get(ctx, gwConfig.Spec.Tyk.ConfigMapRef.NamespacedName(), &configMap); err != nil {
 			l.Info("failed to find ConfigMap from this GatewayConfiguration")
 			return ctrl.Result{}, err
 		}
 
-		anns := gwConfig.GetAnnotations()
-		if anns == nil {
-			anns = make(map[string]string)
-		}
-
-		anns["tyk.tyk.io/tyk-gateway-configmap-resourceVersion"] = configMap.ResourceVersion
-		gwConfig.SetAnnotations(anns)
+		annsUpdated = updateAnnototation(gwConfig, ConfigMapResourceVersionAnnKey, configMap.ResourceVersion)
 	}
 
-	if err := r.Client.Update(ctx, gwConfig); err != nil {
-		return ctrl.Result{}, err
+	labelsUpdated = updateLabels(gwConfig, tykManagedBy, "tyk-operator")
+	if labelsUpdated == mapUpdated || annsUpdated == mapUpdated {
+		return ctrl.Result{}, r.Client.Update(ctx, gwConfig)
 	}
 
 	return ctrl.Result{}, nil

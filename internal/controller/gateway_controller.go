@@ -91,7 +91,7 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	tykGwConf := v1alpha1.GatewayConfiguration{}
 	if gwClass.Spec.ParametersRef != nil {
-		if !validParameters(gwClass.Spec.ParametersRef) {
+		if !validParametersRef(gwClass.Spec.ParametersRef) {
 			return ctrl.Result{}, fmt.Errorf("invalid paramaters ref")
 		}
 
@@ -110,14 +110,6 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	return r.reconcile(ctx, l, &gw, tykGwConf)
-}
-
-func validParameters(ref *gwv1.ParametersReference) bool {
-	if ref == nil {
-		return true
-	}
-
-	return ref.Name != "" && ref.Group == "gateway" && ref.Kind == "GatewayConfiguration"
 }
 
 func (r *GatewayReconciler) reconcileDelete(ctx context.Context, gw *gwv1.Gateway) (ctrl.Result, error) {
