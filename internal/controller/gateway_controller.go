@@ -203,7 +203,8 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 	l.Info("Tyk Gateway Deployment has created / updated")
 
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-tyk-gateway-service", gw.Name),
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      generateSvcName(gw.Name, RegularSvc),
 			Namespace: gw.Namespace},
 	}
 	err = r.createOrUpdate(ctx, svc, func() error {
@@ -224,7 +225,7 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 	if controlApiEnabled {
 		svcControlApi := &corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("%s-tyk-gateway-control-api-service", gw.Name),
+				Name:      generateSvcName(gw.Name, ControlSvc),
 				Namespace: gw.Namespace,
 			},
 		}
@@ -258,6 +259,19 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 	}
 
 	return ctrl.Result{}, nil
+}
+
+const (
+	ControlSvc int = iota
+	RegularSvc int = iota
+)
+
+func generateSvcName(gwName string, svcType int) string {
+	if svcType == ControlSvc {
+		return fmt.Sprintf("%s-tyk-gateway-control-api-service", gwName)
+	}
+
+	return fmt.Sprintf("%s-tyk-gateway-service", gwName)
 }
 
 func listToContainerPort(listener gwv1.Listener) corev1.ContainerPort {
