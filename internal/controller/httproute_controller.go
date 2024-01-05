@@ -22,7 +22,9 @@ import (
 	"fmt"
 	tykApiModel "github.com/TykTechnologies/tyk-operator/api/model"
 	"github.com/TykTechnologies/tyk-operator/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	v1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -66,15 +68,56 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
-	//for _, ref := range desired.Spec.ParentRefs {
-	//	oc := v1alpha1.OperatorContext{
-	//		Spec: v1alpha1.OperatorContextSpec{
-	//			Env: &v1alpha1.Environment{
-	//				URL:
-	//			},
-	//		},
-	//	}
-	//}
+	// TODO: add finalizer
+
+	contexes := []v1alpha1.OperatorContext{}
+	for _, ref := range desired.Spec.ParentRefs {
+		// we only support gateway at the moment. svc can be implemented as well
+		ns := desired.Namespace
+
+		if ref.Namespace != nil && *ref.Namespace != "" {
+			ns = string(*ref.Namespace)
+		}
+
+		gw := &v1.Gateway{}
+		if err := r.Client.Get(ctx, types.NamespacedName{Name: string(ref.Name), Namespace: ns}, gw); err != nil {
+			l.Info("failed to find Gateway", "Gateway", types.NamespacedName{Name: string(ref.Name), Namespace: ns}.String())
+			return ctrl.Result{}, err
+		}
+
+		svcName := generateSvcName(gw.Name, RegularSvc)
+		for _, listener := range gw.Spec.Listeners {
+			if listener.Protocol == ListenerControlAPI {
+				svcName = generateSvcName(gw.Name, ControlSvc)
+			}
+		}
+
+		svc := corev1.Service{}
+		if err := r.Client.Get(ctx, types.NamespacedName{Name: svcName, Namespace: gw.Namespace}, &svc); err != nil {
+			l.Info("failed to find Service", "Service", types.NamespacedName{Name: svcName, Namespace: gw.Namespace}.String())
+			return ctrl.Result{}, err
+		}
+
+		// TODO: obtain gw protocol through listeners, no need to get svc
+
+		// we can do it another controller as well
+		c := v1alpha1.OperatorContext{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-context", ref.Name), Namespace: gw.Namespace},
+			Spec: v1alpha1.OperatorContextSpec{
+				Env: &v1alpha1.Environment{
+					Mode: "ce",
+					URL:  fmt.Sprintf("http://%s.%s.svc:9696", svcName, ns),
+				},
+			},
+		}
+
+		if err := r.Client.Create(ctx, &c); err != nil {
+			l.Info("failed to create operator context")
+			return ctrl.Result{}, err
+		}
+
+		contexes = append(contexes, c)
+	}
 
 	for _, rule := range desired.Spec.Rules {
 		for _, backend := range rule.BackendRefs {
@@ -93,18 +136,21 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 					Namespace: desired.Namespace,
 				}
 
-				_, err := controllerutil.CreateOrUpdate(ctx, r.Client, &apiDef, func() error {
-					if err := controllerutil.SetOwnerReference(desired, &apiDef, r.Scheme); err != nil {
-						l.Error(err, "failed to set owner reference")
-						return err
+				for _, c := range contexes {
+					_, err := controllerutil.CreateOrUpdate(ctx, r.Client, &apiDef, func() error {
+						if err := controllerutil.SetOwnerReference(desired, &apiDef, r.Scheme); err != nil {
+							l.Error(err, "failed to set owner reference")
+							return err
+						}
+
+						reconcileApiDefinition(&apiDef, match)
+						apiDef.Spec.Context = &tykApiModel.Target{Name: c.Name, Namespace: &c.Namespace}
+
+						return nil
+					})
+					if err != nil {
+						return ctrl.Result{}, err
 					}
-
-					reconcileApiDefinition(&apiDef, match)
-
-					return nil
-				})
-				if err != nil {
-					return ctrl.Result{}, err
 				}
 			}
 		}
