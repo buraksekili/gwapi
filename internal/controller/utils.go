@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/api/core/v1"
@@ -10,60 +9,39 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
-	"strconv"
 )
 
-func service(svc *v1.Service, deployments *appsv1.Deployment) {
+func reconcileService(svc *v1.Service, deployments *appsv1.Deployment) {
 	if deployments == nil || svc == nil {
 		return
 	}
 
-	targetPort := intstr.IntOrString{Type: intstr.Int}
-	for _, container := range deployments.Spec.Template.Spec.Containers {
-		lpEnv := getEnv(container.Env, "TYK_GW_LISTENPORT")
-		if lpEnv.Name == "" {
-			lpEnv = v1.EnvVar{Name: "TYK_GW_LISTENPORT", Value: "8080"}
-		}
+	var servicePorts []v1.ServicePort
 
-		lp, err := strconv.Atoi(lpEnv.Value)
-		if err != nil {
-			lp = 8080
-		}
-
-		targetPort.IntVal = int32(lp)
+	containerPorts := deployments.Spec.Template.Spec.Containers[0].Ports
+	for _, containerPort := range containerPorts {
+		servicePorts = append(servicePorts,
+			v1.ServicePort{
+				Name:       containerPort.Name,
+				Port:       containerPort.ContainerPort,
+				TargetPort: intstr.FromInt32(containerPort.ContainerPort),
+				Protocol:   containerPort.Protocol,
+			},
+		)
 	}
 
 	svc.Spec = v1.ServiceSpec{
 		Selector: deployments.Spec.Template.ObjectMeta.Labels,
-		Ports: []v1.ServicePort{
-			{
-				Protocol:   v1.ProtocolTCP,
-				Port:       8080,
-				TargetPort: targetPort,
-			},
-		},
+		Ports:    servicePorts,
 	}
 }
 
-func deployment(l logr.Logger, deploy *appsv1.Deployment, envs []v1.EnvVar, configMap *v1.ConfigMap) {
+func reconcileDeployment(deploy *appsv1.Deployment, configMap *v1.ConfigMap) {
 	if deploy == nil {
 		return
 	}
 
 	replica := int32(1)
-	lpEnv := getEnv(envs, "TYK_GW_LISTENPORT")
-	if lpEnv.Name == "" {
-		l.Info("failed to find listen port, using default 8080")
-		lpEnv = v1.EnvVar{Name: "TYK_GW_LISTENPORT", Value: "8080"}
-	}
-
-	lp, err := strconv.Atoi(lpEnv.Value)
-	if err != nil {
-		l.Info("failed to convert listen port to integer, using default 8080", "error", err)
-		lp = 8080
-	}
-
-	listenPort := int32(lp)
 
 	deploy.Spec = appsv1.DeploymentSpec{
 		Replicas: &replica,
@@ -80,8 +58,8 @@ func deployment(l logr.Logger, deploy *appsv1.Deployment, envs []v1.EnvVar, conf
 					{
 						Name:  "tyk-gateway",
 						Image: "docker.tyk.io/tyk-gateway/tyk-gateway:v5.2.3",
-						Ports: []v1.ContainerPort{{ContainerPort: listenPort}},
-						Env:   envs,
+						//Ports: []v1.ContainerPort{{ContainerPort: listenPort}},
+						//Env: envs,
 					},
 				},
 			},

@@ -26,7 +26,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	"strconv"
 )
 
 const finalizer = "finalizers.buraksekili.github.io/gateway-api-tyk"
@@ -88,6 +88,18 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
+	// Consider how to implement gw.Spec.Addresses
+	for _, listener := range gw.Spec.Listeners {
+		if !validListenerProtocol(listener.Protocol) {
+			l.Info(
+				"skip reconciling Gateway with unsupported protocol type",
+				"protocol", listener.Protocol,
+			)
+
+			continue
+		}
+	}
+
 	tykGwConf := v1alpha1.GatewayConfiguration{}
 	if gwClass.Spec.ParametersRef != nil {
 		if !validParametersRef(gwClass.Spec.ParametersRef) {
@@ -134,22 +146,6 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 
 	labels[tykManagedBy] = gwv1.AnnotationValue(fmt.Sprintf("%s-%s", gw.Namespace, gw.Name))
 
-	// Consider how to implement gw.Spec.Addresses
-
-	var envs []corev1.EnvVar
-
-	for _, listener := range gw.Spec.Listeners {
-		if listener.Protocol != "HTTP" && listener.Protocol != "controlapi" {
-			l.Info("unsupported protocol type defined in Gateway", "protocol", listener.Protocol)
-			return ctrl.Result{}, nil
-		}
-
-		// TODO: Configure Tyk Gateway here based on listener options.
-
-		listenerPort := intstr.FromInt32(int32(listener.Port))
-		envs = append(envs, corev1.EnvVar{Name: "TYK_GW_LISTENPORT", Value: listenerPort.String()})
-	}
-
 	tykConfigMap := &corev1.ConfigMap{}
 	if conf.Spec.Tyk.ConfigMapRef.Name != "" {
 		err := r.Client.Get(ctx, conf.Spec.Tyk.ConfigMapRef.NamespacedName(), tykConfigMap)
@@ -174,7 +170,20 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 			return err
 		}
 
-		deployment(l, &deploy, envs, tykConfigMap)
+		reconcileDeployment(&deploy, tykConfigMap)
+		containerPorts := deploy.Spec.Template.Spec.Containers[0].Ports
+
+		for _, listener := range gw.Spec.Listeners {
+			containerPorts = append(containerPorts, corev1.ContainerPort{
+				ContainerPort: int32(listener.Port),
+				Name:          string(listener.Name),
+			})
+		}
+
+		listenPort := decideTykGwListenPort(gw.Spec.Listeners)
+		deploy.Spec.Template.Spec.Containers[0].Ports = containerPorts
+		deploy.Spec.Template.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "TYK_GW_LISTENPORT", Value: listenPort}}
+
 		return nil
 	})
 	if err != nil {
@@ -191,7 +200,7 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 			return err
 		}
 
-		service(svc, &deploy)
+		reconcileService(svc, &deploy)
 		return nil
 	})
 	if err != nil {
@@ -200,6 +209,50 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func decideTykGwListenPort(listeners []gwv1.Listener) string {
+	listenPortListener := ""
+	listenPortHTTPS := ""
+	listenPortHTTP := ""
+
+	for _, listener := range listeners {
+		if listener.Protocol == ListenerListenPort {
+			listenPortListener = strconv.Itoa(int(listener.Port))
+		}
+		if listener.Protocol == gwv1.HTTPSProtocolType {
+			listenPortHTTPS = strconv.Itoa(int(listener.Port))
+		}
+		if listener.Protocol == gwv1.HTTPProtocolType {
+			listenPortHTTP = strconv.Itoa(int(listener.Port))
+		}
+	}
+
+	if listenPortListener != "" {
+		return listenPortListener
+	}
+	if listenPortHTTPS != "" {
+		return listenPortHTTPS
+	}
+	if listenPortHTTP != "" {
+		return listenPortHTTP
+	}
+
+	return "8080"
+}
+
+const (
+	ListenerControlAPI = "tyk.io/control"
+	ListenerListenPort = "tyk.io/listen"
+)
+
+func validListenerProtocol(protocol gwv1.ProtocolType) bool {
+	if protocol != gwv1.HTTPProtocolType && protocol != gwv1.HTTPSProtocolType &&
+		protocol != ListenerControlAPI && protocol != ListenerListenPort {
+		return false
+	}
+
+	return true
 }
 
 // SetupWithManager sets up the controller with the Manager.

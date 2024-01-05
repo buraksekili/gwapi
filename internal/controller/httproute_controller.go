@@ -62,20 +62,30 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if err := validRouteParentRefs(desired.Spec.ParentRefs); err != nil {
+	if err := validateRouteParentRefs(desired.Spec.ParentRefs); err != nil {
 		return ctrl.Result{}, err
 	}
+
+	//for _, ref := range desired.Spec.ParentRefs {
+	//	oc := v1alpha1.OperatorContext{
+	//		Spec: v1alpha1.OperatorContextSpec{
+	//			Env: &v1alpha1.Environment{
+	//				URL:
+	//			},
+	//		},
+	//	}
+	//}
 
 	for _, rule := range desired.Spec.Rules {
 		for _, backend := range rule.BackendRefs {
 			api := v1alpha1.ApiDefinition{
-				ObjectMeta: metav1.ObjectMeta{},
 				Spec: v1alpha1.APIDefinitionSpec{
 					APIDefinitionSpec: tykApiModel.APIDefinitionSpec{
 						Proxy: tykApiModel.Proxy{TargetURL: generateTargetURL(req.Namespace, backend)},
 					},
 				},
 			}
+
 			for _, match := range rule.Matches {
 				apiDef := api
 				apiDef.ObjectMeta = metav1.ObjectMeta{
@@ -103,7 +113,7 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	return ctrl.Result{}, nil
 }
 
-func validRouteParentRefs(refs []v1.ParentReference) error {
+func validateRouteParentRefs(refs []v1.ParentReference) error {
 	for i := range refs {
 		if refs[i].Kind != nil && *refs[i].Kind != "Gateway" {
 			return fmt.Errorf("invalid kind for HTTPRoute, expected Gateway got %v", *refs[i].Kind)
