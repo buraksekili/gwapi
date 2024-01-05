@@ -11,27 +11,24 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
-func reconcileService(svc *v1.Service, deployments *appsv1.Deployment) {
-	if deployments == nil || svc == nil {
+func reconcileService(svc *v1.Service, ls map[string]string, ports []v1.ContainerPort) {
+	if svc == nil {
 		return
 	}
 
 	var servicePorts []v1.ServicePort
 
-	containerPorts := deployments.Spec.Template.Spec.Containers[0].Ports
-	for _, containerPort := range containerPorts {
-		servicePorts = append(servicePorts,
-			v1.ServicePort{
-				Name:       containerPort.Name,
-				Port:       containerPort.ContainerPort,
-				TargetPort: intstr.FromInt32(containerPort.ContainerPort),
-				Protocol:   containerPort.Protocol,
-			},
-		)
+	for _, containerPort := range ports {
+		servicePorts = append(servicePorts, v1.ServicePort{
+			Name:       containerPort.Name,
+			Port:       containerPort.ContainerPort,
+			TargetPort: intstr.FromInt32(containerPort.ContainerPort),
+			Protocol:   containerPort.Protocol,
+		})
 	}
 
 	svc.Spec = v1.ServiceSpec{
-		Selector: deployments.Spec.Template.ObjectMeta.Labels,
+		Selector: ls,
 		Ports:    servicePorts,
 	}
 }
@@ -58,8 +55,6 @@ func reconcileDeployment(deploy *appsv1.Deployment, configMap *v1.ConfigMap) {
 					{
 						Name:  "tyk-gateway",
 						Image: "docker.tyk.io/tyk-gateway/tyk-gateway:v5.2.3",
-						//Ports: []v1.ContainerPort{{ContainerPort: listenPort}},
-						//Env: envs,
 					},
 				},
 			},

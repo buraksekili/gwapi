@@ -164,6 +164,8 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 		},
 	}
 
+	controlApiListener, controlApiEnabled := controlPortEnabled(gw.Spec.Listeners)
+
 	err := r.createOrUpdate(ctx, &deploy, func() error {
 		if err := ctrl.SetControllerReference(gw, &deploy, r.Scheme); err != nil {
 			l.Info("Failed to update controller reference of the gateway deployment")
@@ -180,9 +182,16 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 			})
 		}
 
-		listenPort := decideTykGwListenPort(gw.Spec.Listeners)
 		deploy.Spec.Template.Spec.Containers[0].Ports = containerPorts
-		deploy.Spec.Template.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "TYK_GW_LISTENPORT", Value: listenPort}}
+		envs := []corev1.EnvVar{{
+			Name: "TYK_GW_LISTENPORT", Value: decideTykGwListenPort(gw.Spec.Listeners),
+		}}
+
+		if controlApiEnabled {
+			envs = append(envs, corev1.EnvVar{Name: "TYK_GW_CONTROLAPIPORT", Value: listenerToStr(controlApiListener)})
+		}
+
+		deploy.Spec.Template.Spec.Containers[0].Env = envs
 
 		return nil
 	})
@@ -200,7 +209,7 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 			return err
 		}
 
-		reconcileService(svc, &deploy)
+		reconcileService(svc, deploy.ObjectMeta.Labels, deploy.Spec.Template.Spec.Containers[0].Ports)
 		return nil
 	})
 	if err != nil {
@@ -208,7 +217,50 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 		return ctrl.Result{}, err
 	}
 
+	// this one should be accessible LB
+	if controlApiEnabled {
+		svcControlApi := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "tyk-gateway-control-api-service", Namespace: gw.Namespace}}
+		err = r.createOrUpdate(ctx, svcControlApi, func() error {
+			if err = ctrl.SetControllerReference(gw, svcControlApi, r.Scheme); err != nil {
+				l.Info("Failed to update controller reference of the gateway deployment")
+				return err
+			}
+
+			reconcileService(
+				svcControlApi,
+				deploy.ObjectMeta.Labels,
+				[]corev1.ContainerPort{listToContainerPort(controlApiListener)},
+			)
+			return nil
+		})
+		if err != nil {
+			l.Error(err, "failed to create Tyk Gateway Deployment")
+			return ctrl.Result{}, err
+		}
+	}
+
 	return ctrl.Result{}, nil
+}
+
+func listToContainerPort(listener gwv1.Listener) corev1.ContainerPort {
+	return corev1.ContainerPort{
+		Name:          string(listener.Name),
+		ContainerPort: int32(listener.Port),
+	}
+}
+
+func listenerToStr(listener gwv1.Listener) string {
+	return strconv.Itoa(int(listener.Port))
+}
+
+func controlPortEnabled(listeners []gwv1.Listener) (gwv1.Listener, bool) {
+	for _, listener := range listeners {
+		if listener.Protocol == ListenerControlAPI {
+			return listener, true
+		}
+	}
+
+	return gwv1.Listener{}, false
 }
 
 func decideTykGwListenPort(listeners []gwv1.Listener) string {
@@ -217,13 +269,12 @@ func decideTykGwListenPort(listeners []gwv1.Listener) string {
 	listenPortHTTP := ""
 
 	for _, listener := range listeners {
-		if listener.Protocol == ListenerListenPort {
+		switch listener.Protocol {
+		case ListenerListenPort:
 			listenPortListener = strconv.Itoa(int(listener.Port))
-		}
-		if listener.Protocol == gwv1.HTTPSProtocolType {
+		case gwv1.HTTPSProtocolType:
 			listenPortHTTPS = strconv.Itoa(int(listener.Port))
-		}
-		if listener.Protocol == gwv1.HTTPProtocolType {
+		case gwv1.HTTPProtocolType:
 			listenPortHTTP = strconv.Itoa(int(listener.Port))
 		}
 	}
