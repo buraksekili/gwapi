@@ -157,7 +157,7 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 
 	deploy := v1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        "tyk-gateway",
+			Name:        fmt.Sprintf("%s-tyk-gateway", gw.Name),
 			Namespace:   gw.Namespace,
 			Labels:      getRawMap(labels),
 			Annotations: getRawMap(annotations),
@@ -202,7 +202,10 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 
 	l.Info("Tyk Gateway Deployment has created / updated")
 
-	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "tyk-gateway-service", Namespace: gw.Namespace}}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-tyk-gateway-service", gw.Name),
+			Namespace: gw.Namespace},
+	}
 	err = r.createOrUpdate(ctx, svc, func() error {
 		if err = ctrl.SetControllerReference(gw, svc, r.Scheme); err != nil {
 			l.Info("Failed to update controller reference of the gateway deployment")
@@ -219,7 +222,12 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 
 	// this one should be accessible LB
 	if controlApiEnabled {
-		svcControlApi := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "tyk-gateway-control-api-service", Namespace: gw.Namespace}}
+		svcControlApi := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("%s-tyk-gateway-control-api-service", gw.Name),
+				Namespace: gw.Namespace,
+			},
+		}
 		err = r.createOrUpdate(ctx, svcControlApi, func() error {
 			if err = ctrl.SetControllerReference(gw, svcControlApi, r.Scheme); err != nil {
 				l.Info("Failed to update controller reference of the gateway deployment")
@@ -236,6 +244,16 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 		if err != nil {
 			l.Error(err, "failed to create Tyk Gateway Deployment")
 			return ctrl.Result{}, err
+		}
+	} else {
+		// delete orphan control port svc
+		orphanSvc := &corev1.Service{}
+		err = r.Client.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("%s-tyk-gateway-control-api-service", gw.Name), Namespace: gw.Namespace}, orphanSvc)
+		if err == nil {
+			if err = r.Client.Delete(ctx, orphanSvc); err != nil {
+				l.Info("failed to delete orphan svc")
+				return ctrl.Result{}, err
+			}
 		}
 	}
 
