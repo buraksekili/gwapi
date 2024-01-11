@@ -51,31 +51,36 @@ func reconcileDeployment(deploy *appsv1.Deployment, configMap *v1.ConfigMap) {
 		},
 	}
 
-	if configMap != nil {
-		anns := deploy.Spec.Template.GetAnnotations()
-		addToAnnotations(anns, ConfigMapResourceVersionAnnKey, configMap.ResourceVersion)
-		deploy.Spec.Template.SetAnnotations(anns)
+}
 
-		deploy.Spec.Template.Spec.Volumes = []v1.Volume{
-			{
-				Name: "config-volume",
-				VolumeSource: v1.VolumeSource{
-					ConfigMap: &v1.ConfigMapVolumeSource{
-						LocalObjectReference: v1.LocalObjectReference{
-							Name: configMap.ObjectMeta.Name,
-						},
+func handleConfigMap(configMap *v1.ConfigMap, deploy *appsv1.Deployment) {
+	if configMap == nil || deploy == nil {
+		return
+	}
+
+	anns := deploy.Spec.Template.GetAnnotations()
+	addToAnnotations(anns, ConfigMapResourceVersionAnnKey, configMap.ResourceVersion)
+	deploy.Spec.Template.SetAnnotations(anns)
+
+	deploy.Spec.Template.Spec.Volumes = []v1.Volume{
+		{
+			Name: "config-volume",
+			VolumeSource: v1.VolumeSource{
+				ConfigMap: &v1.ConfigMapVolumeSource{
+					LocalObjectReference: v1.LocalObjectReference{
+						Name: configMap.ObjectMeta.Name,
 					},
 				},
 			},
-		}
+		},
+	}
 
-		deploy.Spec.Template.Spec.Containers[0].VolumeMounts = []v1.VolumeMount{
-			{
-				Name:      "config-volume",
-				MountPath: "/opt/tyk-gateway/tyk.conf",
-				SubPath:   "tyk.conf",
-			},
-		}
+	deploy.Spec.Template.Spec.Containers[0].VolumeMounts = []v1.VolumeMount{
+		{
+			Name:      "config-volume",
+			MountPath: "/opt/tyk-gateway/tyk.conf",
+			SubPath:   "tyk.conf",
+		},
 	}
 }
 

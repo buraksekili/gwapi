@@ -139,15 +139,6 @@ const (
 func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gwv1.Gateway, conf v1alpha1.GatewayConfiguration) (ctrl.Result, error) {
 	controllerutil.AddFinalizer(gw, finalizer)
 
-	tykConfigMap := &corev1.ConfigMap{}
-	if conf.Spec.Tyk.ConfigMapRef.Name != "" {
-		err := r.Client.Get(ctx, conf.Spec.Tyk.ConfigMapRef.NamespacedName(), tykConfigMap)
-		if err != nil {
-			// TODO: add events
-			return ctrl.Result{}, err
-		}
-	}
-
 	svcPorts := make(map[string]corev1.ServicePort)
 	for _, listener := range gw.Spec.Listeners {
 		svcPorts[string(listener.Protocol)] = corev1.ServicePort{
@@ -156,7 +147,7 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 		}
 	}
 
-	deploy, err := r.reconcileDeployment(ctx, gw, tykConfigMap, svcPorts)
+	deploy, err := r.reconcileDeployment(ctx, gw, &conf, svcPorts)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -229,9 +220,18 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 func (r *GatewayReconciler) reconcileDeployment(
 	ctx context.Context,
 	gw *gwv1.Gateway,
-	tykConfigMap *corev1.ConfigMap,
+	conf *v1alpha1.GatewayConfiguration,
 	svcPorts map[string]corev1.ServicePort,
 ) (v1.Deployment, error) {
+	tykConfigMap := &corev1.ConfigMap{}
+	if conf.Spec.Tyk.ConfigMapRef.Name != "" {
+		err := r.Client.Get(ctx, conf.Spec.Tyk.ConfigMapRef.NamespacedName(), tykConfigMap)
+		if err != nil {
+			// TODO: add events
+			return v1.Deployment{}, err
+		}
+	}
+
 	labels := map[gwv1.AnnotationKey]gwv1.AnnotationValue{}
 	annotations := map[gwv1.AnnotationKey]gwv1.AnnotationValue{}
 
@@ -255,15 +255,17 @@ func (r *GatewayReconciler) reconcileDeployment(
 			return err
 		}
 
-		listenPort := int32(8080)
+		lpSvcPort := corev1.ServicePort{Port: 8080}
 		if lp, ok := svcPorts[string(ListenerListenPort)]; ok {
-			listenPort = lp.Port
+			lpSvcPort = lp
 		}
 
-		openPortOnDeploy(&deploy, ListenerListenPort, listenPort)
+		handleConfigMap(tykConfigMap, &deploy)
+
+		openPortOnDeploy(&deploy, ListenerListenPort, lpSvcPort)
 
 		if controlApi, controlApiEnabled := svcPorts[string(ListenerControlAPI)]; controlApiEnabled {
-			openPortOnDeploy(&deploy, ListenerControlAPI, controlApi.Port)
+			openPortOnDeploy(&deploy, ListenerControlAPI, controlApi)
 		} else {
 			// delete controlapiport
 		}
@@ -277,17 +279,17 @@ func (r *GatewayReconciler) reconcileDeployment(
 	return deploy, err
 }
 
-func openPortOnDeploy(deploy *v1.Deployment, portType ListenerPortType, port int32) {
+func openPortOnDeploy(deploy *v1.Deployment, portType ListenerPortType, svcPort corev1.ServicePort) {
 	ports := deploy.Spec.Template.Spec.Containers[0].Ports
 	envs := deploy.Spec.Template.Spec.Containers[0].Env
 
-	portExists, envIdx := false, -1
+	portIdx, envIdx := -1, -1
 
 	switch portType {
 	case ListenerListenPort:
 		for i := range ports {
-			if port == ports[i].ContainerPort {
-				portExists = true
+			if svcPort.Port == ports[i].ContainerPort {
+				portIdx = i
 				break
 			}
 		}
@@ -300,14 +302,14 @@ func openPortOnDeploy(deploy *v1.Deployment, portType ListenerPortType, port int
 		}
 
 		if envIdx > -1 {
-			envs[envIdx] = corev1.EnvVar{Name: "TYK_GW_LISTENPORT", Value: int32ToStr(port)}
+			envs[envIdx] = corev1.EnvVar{Name: "TYK_GW_LISTENPORT", Value: int32ToStr(svcPort.Port)}
 		} else {
-			envs = append(envs, corev1.EnvVar{Name: "TYK_GW_LISTENPORT", Value: int32ToStr(port)})
+			envs = append(envs, corev1.EnvVar{Name: "TYK_GW_LISTENPORT", Value: int32ToStr(svcPort.Port)})
 		}
 	case ListenerControlAPI:
 		for i := range ports {
-			if port == ports[i].ContainerPort {
-				portExists = true
+			if svcPort.Port == ports[i].ContainerPort {
+				portIdx = i
 				break
 			}
 		}
@@ -320,14 +322,14 @@ func openPortOnDeploy(deploy *v1.Deployment, portType ListenerPortType, port int
 		}
 
 		if envIdx > -1 {
-			envs[envIdx] = corev1.EnvVar{Name: "TYK_GW_CONTROLAPIPORT", Value: int32ToStr(port)}
+			envs[envIdx] = corev1.EnvVar{Name: "TYK_GW_CONTROLAPIPORT", Value: int32ToStr(svcPort.Port)}
 		} else {
-			envs = append(envs, corev1.EnvVar{Name: "TYK_GW_CONTROLAPIPORT", Value: int32ToStr(port)})
+			envs = append(envs, corev1.EnvVar{Name: "TYK_GW_CONTROLAPIPORT", Value: int32ToStr(svcPort.Port)})
 		}
 	}
 
-	if !portExists {
-		deploy.Spec.Template.Spec.Containers[0].Ports = append(deploy.Spec.Template.Spec.Containers[0].Ports, corev1.ContainerPort{ContainerPort: port})
+	if portIdx == -1 {
+		deploy.Spec.Template.Spec.Containers[0].Ports = append(deploy.Spec.Template.Spec.Containers[0].Ports, corev1.ContainerPort{ContainerPort: svcPort.Port, Name: svcPort.Name})
 	}
 	deploy.Spec.Template.Spec.Containers[0].Env = envs
 }
