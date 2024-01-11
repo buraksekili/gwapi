@@ -19,7 +19,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	tykV1Alpha1 "github.com/TykTechnologies/tyk-operator/api/v1alpha1"
 	"github.com/buraksekili/gateway-api-tyk/api/v1alpha1"
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/apps/v1"
@@ -140,6 +139,99 @@ const (
 func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gwv1.Gateway, conf v1alpha1.GatewayConfiguration) (ctrl.Result, error) {
 	controllerutil.AddFinalizer(gw, finalizer)
 
+	tykConfigMap := &corev1.ConfigMap{}
+	if conf.Spec.Tyk.ConfigMapRef.Name != "" {
+		err := r.Client.Get(ctx, conf.Spec.Tyk.ConfigMapRef.NamespacedName(), tykConfigMap)
+		if err != nil {
+			// TODO: add events
+			return ctrl.Result{}, err
+		}
+	}
+
+	svcPorts := make(map[string]corev1.ServicePort)
+	for _, listener := range gw.Spec.Listeners {
+		svcPorts[string(listener.Protocol)] = corev1.ServicePort{
+			Name: string(listener.Name),
+			Port: int32(listener.Port),
+		}
+	}
+
+	deploy, err := r.reconcileDeployment(ctx, gw, tykConfigMap, svcPorts)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	err = r.reconcileSvc(ctx, svcReconcileReq{
+		svcType:        regularSvcType,
+		ownerGw:        gw,
+		selectorLabels: deploy.Labels,
+		svcPorts:       svcPorts,
+	})
+	if err != nil {
+		l.Error(err, "failed to create Tyk Gateway Service")
+		return ctrl.Result{}, err
+	}
+
+	controlAPISvcReq := svcReconcileReq{
+		svcType:        controlSvcType,
+		ownerGw:        gw,
+		selectorLabels: deploy.Labels,
+		svcPorts:       svcPorts,
+	}
+	if err = r.reconcileControlApiSvc(ctx, controlAPISvcReq); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	//auth := ""
+	//if conf.Spec.Tyk.Auth != "" {
+	//	auth = conf.Spec.Tyk.Auth
+	//}
+	//org := ""
+	//if conf.Spec.Tyk.Org != "" {
+	//	auth = conf.Spec.Tyk.Org
+	//}
+
+	//r.reconcileOperatorContexts(ctx)
+
+	// TODO: check if tls enabled
+	//svcURL := fmt.Sprintf("http://%s.%s.svc:%v", generateSvcName(gw.Name, regularSvcType), gw.Namespace, svc.Spec.Ports[0].Port)
+	//if controlApiEnabled {
+	//	svcURL = fmt.Sprintf("http://%s.%s.svc:%v", svcControlApi.Name, svcControlApi.Namespace, svcControlApi.Spec.Ports[0].Port)
+	//}
+	// we can do it another controller as well
+	//c := tykV1Alpha1.OperatorContext{
+	//	ObjectMeta: metav1.ObjectMeta{
+	//		Name:      fmt.Sprintf("%s-context", gw.Name),
+	//		Namespace: gw.Namespace,
+	//		Labels: map[string]string{
+	//			gatewayNameLabel:      gw.ObjectMeta.Name,
+	//			gatewayNamespaceLabel: gw.ObjectMeta.Namespace,
+	//		},
+	//	},
+	//}
+	//
+	//err = r.createOrUpdate(ctx, &c, func() error {
+	//	c.Spec = tykV1Alpha1.OperatorContextSpec{
+	//		Env: &tykV1Alpha1.Environment{
+	//			Mode: "ce",
+	//			URL:  svcURL,
+	//			Auth: auth,
+	//			Org:  org,
+	//		},
+	//	}
+	//
+	//	return nil
+	//})
+
+	return ctrl.Result{}, nil
+}
+
+func (r *GatewayReconciler) reconcileDeployment(
+	ctx context.Context,
+	gw *gwv1.Gateway,
+	tykConfigMap *corev1.ConfigMap,
+	svcPorts map[string]corev1.ServicePort,
+) (v1.Deployment, error) {
 	labels := map[gwv1.AnnotationKey]gwv1.AnnotationValue{}
 	annotations := map[gwv1.AnnotationKey]gwv1.AnnotationValue{}
 
@@ -150,160 +242,145 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 
 	labels[tykManagedBy] = gwv1.AnnotationValue(fmt.Sprintf("%s-%s", gw.Namespace, gw.Name))
 
-	tykConfigMap := &corev1.ConfigMap{}
-	if conf.Spec.Tyk.ConfigMapRef.Name != "" {
-		err := r.Client.Get(ctx, conf.Spec.Tyk.ConfigMapRef.NamespacedName(), tykConfigMap)
-		if err != nil {
-			// TODO: add events
-			return ctrl.Result{}, err
-		}
-	}
-
-	deploy := v1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        fmt.Sprintf("%s-tyk-gateway", gw.Name),
-			Namespace:   gw.Namespace,
-			Labels:      getRawMap(labels),
-			Annotations: getRawMap(annotations),
-		},
-	}
-
-	controlApiListener, controlApiEnabled := controlPortEnabled(gw.Spec.Listeners)
+	deploy := v1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Name:        fmt.Sprintf("%s-tyk-gateway", gw.Name),
+		Namespace:   gw.Namespace,
+		Labels:      getRawMap(labels),
+		Annotations: getRawMap(annotations),
+	}}
+	reconcileDeployment(&deploy, tykConfigMap)
 
 	err := r.createOrUpdate(ctx, &deploy, func() error {
 		if err := ctrl.SetControllerReference(gw, &deploy, r.Scheme); err != nil {
-			l.Info("Failed to update controller reference of the gateway deployment")
 			return err
 		}
 
-		reconcileDeployment(&deploy, tykConfigMap)
-		containerPorts := deploy.Spec.Template.Spec.Containers[0].Ports
-
-		for _, listener := range gw.Spec.Listeners {
-			containerPorts = append(containerPorts, corev1.ContainerPort{
-				ContainerPort: int32(listener.Port),
-				Name:          string(listener.Name),
-			})
+		listenPort := int32(8080)
+		if lp, ok := svcPorts[string(ListenerListenPort)]; ok {
+			listenPort = lp.Port
 		}
 
-		deploy.Spec.Template.Spec.Containers[0].Ports = containerPorts
-		envs := []corev1.EnvVar{{
-			Name: "TYK_GW_LISTENPORT", Value: decideTykGwListenPort(gw.Spec.Listeners),
-		}}
+		openPortOnDeploy(&deploy, ListenerListenPort, listenPort)
 
-		if controlApiEnabled {
-			envs = append(envs, corev1.EnvVar{Name: "TYK_GW_CONTROLAPIPORT", Value: portToStr(controlApiListener.Port)})
+		if controlApi, controlApiEnabled := svcPorts[string(ListenerControlAPI)]; controlApiEnabled {
+			openPortOnDeploy(&deploy, ListenerControlAPI, controlApi.Port)
+		} else {
+			// delete controlapiport
 		}
-
-		deploy.Spec.Template.Spec.Containers[0].Env = envs
 
 		return nil
 	})
 	if err != nil {
-		l.Error(err, "failed to create Tyk Gateway Deployment")
-		return ctrl.Result{}, err
+		return v1.Deployment{}, nil
 	}
 
-	l.Info("Tyk Gateway Deployment has created / updated")
+	return deploy, err
+}
 
+func openPortOnDeploy(deploy *v1.Deployment, portType ListenerPortType, port int32) {
+	ports := deploy.Spec.Template.Spec.Containers[0].Ports
+	envs := deploy.Spec.Template.Spec.Containers[0].Env
+
+	portExists, envIdx := false, -1
+
+	switch portType {
+	case ListenerListenPort:
+		for i := range ports {
+			if port == ports[i].ContainerPort {
+				portExists = true
+				break
+			}
+		}
+
+		for i := range envs {
+			if "TYK_GW_LISTENPORT" == envs[i].Name {
+				envIdx = i
+				break
+			}
+		}
+
+		if envIdx > -1 {
+			envs[envIdx] = corev1.EnvVar{Name: "TYK_GW_LISTENPORT", Value: int32ToStr(port)}
+		} else {
+			envs = append(envs, corev1.EnvVar{Name: "TYK_GW_LISTENPORT", Value: int32ToStr(port)})
+		}
+	case ListenerControlAPI:
+		for i := range ports {
+			if port == ports[i].ContainerPort {
+				portExists = true
+				break
+			}
+		}
+
+		for i := range envs {
+			if "TYK_GW_CONTROLAPIPORT" == envs[i].Name {
+				envIdx = i
+				break
+			}
+		}
+
+		if envIdx > -1 {
+			envs[envIdx] = corev1.EnvVar{Name: "TYK_GW_CONTROLAPIPORT", Value: int32ToStr(port)}
+		} else {
+			envs = append(envs, corev1.EnvVar{Name: "TYK_GW_CONTROLAPIPORT", Value: int32ToStr(port)})
+		}
+	}
+
+	if !portExists {
+		deploy.Spec.Template.Spec.Containers[0].Ports = append(deploy.Spec.Template.Spec.Containers[0].Ports, corev1.ContainerPort{ContainerPort: port})
+	}
+	deploy.Spec.Template.Spec.Containers[0].Env = envs
+}
+
+type svcReconcileReq struct {
+	ownerGw        *gwv1.Gateway
+	svcPort        corev1.ServicePort
+	svcPorts       map[string]corev1.ServicePort
+	selectorLabels map[string]string
+	svcType        int
+}
+
+func (r *GatewayReconciler) reconcileSvc(ctx context.Context, req svcReconcileReq) error {
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      generateSvcName(gw.Name, regularSvcType),
-			Namespace: gw.Namespace},
+			Name:      generateSvcName(req.ownerGw.Name, req.svcType),
+			Namespace: req.ownerGw.Namespace,
+			Labels: map[string]string{
+				gatewayNameLabel:      req.ownerGw.Name,
+				gatewayNamespaceLabel: req.ownerGw.Namespace,
+			},
+		},
 	}
-	err = r.createOrUpdate(ctx, svc, func() error {
-		if err = ctrl.SetControllerReference(gw, svc, r.Scheme); err != nil {
-			l.Info("Failed to update controller reference of the gateway deployment")
+
+	err := r.createOrUpdate(ctx, svc, func() error {
+		if err := ctrl.SetControllerReference(req.ownerGw, svc, r.Scheme); err != nil {
 			return err
 		}
 
-		reconcileService(svc, deploy.ObjectMeta.Labels, deploy.Spec.Template.Spec.Containers[0].Ports)
+		ports := []corev1.ServicePort{}
+
+		switch req.svcType {
+		case regularSvcType:
+			for _, v := range []string{string(gwv1.HTTPProtocolType), string(ListenerListenPort)} {
+				if p, exists := req.svcPorts[v]; exists {
+					ports = append(ports, p)
+				}
+			}
+		case controlSvcType:
+			if p, exists := req.svcPorts[string(ListenerControlAPI)]; exists {
+				ports = append(ports, p)
+			}
+		}
+
+		reconcileService(svc, req.selectorLabels, ports)
+
 		return nil
 	})
 	if err != nil {
-		l.Error(err, "failed to create Tyk Gateway Deployment")
-		return ctrl.Result{}, err
+		return err
 	}
 
-	svcControlApi := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      generateSvcName(gw.Name, controlSvcType),
-			Namespace: gw.Namespace,
-		},
-	}
-
-	// this one should be accessible LB
-	if controlApiEnabled {
-		err = r.createOrUpdate(ctx, svcControlApi, func() error {
-			if err = ctrl.SetControllerReference(gw, svcControlApi, r.Scheme); err != nil {
-				l.Info("Failed to update controller reference of the gateway deployment")
-				return err
-			}
-
-			reconcileService(
-				svcControlApi,
-				deploy.ObjectMeta.Labels,
-				[]corev1.ContainerPort{listenerToContainerPort(controlApiListener)},
-			)
-			return nil
-		})
-		if err != nil {
-			l.Error(err, "failed to create Tyk Gateway Deployment")
-			return ctrl.Result{}, err
-		}
-	} else {
-		// delete orphan control port svc
-		orphanSvc := &corev1.Service{}
-		err = r.Client.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("%s-tyk-gateway-control-api-service", gw.Name), Namespace: gw.Namespace}, orphanSvc)
-		if err == nil {
-			if err = r.Client.Delete(ctx, orphanSvc); err != nil {
-				l.Info("failed to delete orphan svc")
-				return ctrl.Result{}, err
-			}
-		}
-	}
-
-	auth := ""
-	if conf.Spec.Tyk.Auth != "" {
-		auth = conf.Spec.Tyk.Auth
-	}
-	org := ""
-	if conf.Spec.Tyk.Org != "" {
-		auth = conf.Spec.Tyk.Org
-	}
-
-	// TODO: check if tls enabled
-	svcURL := fmt.Sprintf("http://%s.%s.svc:%v", svc.Name, svc.Namespace, svc.Spec.Ports[0].Port)
-	if controlApiEnabled {
-		svcURL = fmt.Sprintf("http://%s.%s.svc:%v", svcControlApi.Name, svcControlApi.Namespace, svcControlApi.Spec.Ports[0].Port)
-	}
-
-	// we can do it another controller as well
-	c := tykV1Alpha1.OperatorContext{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-context", gw.Name),
-			Namespace: gw.Namespace,
-			Labels: map[string]string{
-				gatewayNameLabel:      gw.ObjectMeta.Name,
-				gatewayNamespaceLabel: gw.ObjectMeta.Namespace,
-			},
-		},
-	}
-
-	err = r.createOrUpdate(ctx, &c, func() error {
-		c.Spec = tykV1Alpha1.OperatorContextSpec{
-			Env: &tykV1Alpha1.Environment{
-				Mode: "ce",
-				URL:  svcURL,
-				Auth: auth,
-				Org:  org,
-			},
-		}
-
-		return nil
-	})
-
-	return ctrl.Result{}, nil
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -350,4 +427,28 @@ func (r *GatewayReconciler) findGatewaysFromGatewayClass(ctx context.Context, gw
 func (r *GatewayReconciler) createOrUpdate(ctx context.Context, object client.Object, fn controllerutil.MutateFn) error {
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, object, fn)
 	return err
+}
+
+func (r *GatewayReconciler) reconcileControlApiSvc(ctx context.Context, req svcReconcileReq) error {
+	if _, ok := req.svcPorts[string(ListenerControlAPI)]; ok {
+		if err := r.reconcileSvc(ctx, req); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	orphanSvc := &corev1.Service{}
+
+	err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      fmt.Sprintf("%s-tyk-gateway-control-api-service", req.ownerGw.Name),
+		Namespace: req.ownerGw.Namespace,
+	}, orphanSvc)
+	if err == nil {
+		if err = r.Client.Delete(ctx, orphanSvc); err != nil {
+			return nil
+		}
+	}
+
+	return nil
 }

@@ -7,31 +7,19 @@ import (
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	"strconv"
 )
 
-func reconcileService(svc *v1.Service, ls map[string]string, ports []v1.ContainerPort) {
+func reconcileService(svc *v1.Service, ls map[string]string, ports []v1.ServicePort) {
 	if svc == nil {
 		return
 	}
 
-	var servicePorts []v1.ServicePort
-
-	for _, containerPort := range ports {
-		servicePorts = append(servicePorts, v1.ServicePort{
-			Name:       containerPort.Name,
-			Port:       containerPort.ContainerPort,
-			TargetPort: intstr.FromInt32(containerPort.ContainerPort),
-			Protocol:   containerPort.Protocol,
-		})
-	}
-
 	svc.Spec = v1.ServiceSpec{
 		Selector: ls,
-		Ports:    servicePorts,
+		Ports:    ports,
 	}
 }
 
@@ -135,53 +123,16 @@ func listenerToContainerPort(listener gwv1.Listener) v1.ContainerPort {
 	}
 }
 
-func portToStr(port gwv1.PortNumber) string {
+func int32ToStr(port int32) string {
 	return strconv.Itoa(int(port))
 }
 
-func decideTykGwListenPort(listeners []gwv1.Listener) string {
-	listenPortListener := ""
-	listenPortHTTPS := ""
-	listenPortHTTP := ""
-
-	for _, listener := range listeners {
-		switch listener.Protocol {
-		case ListenerListenPort:
-			listenPortListener = strconv.Itoa(int(listener.Port))
-		case gwv1.HTTPSProtocolType:
-			listenPortHTTPS = strconv.Itoa(int(listener.Port))
-		case gwv1.HTTPProtocolType:
-			listenPortHTTP = strconv.Itoa(int(listener.Port))
-		}
-	}
-
-	if listenPortListener != "" {
-		return listenPortListener
-	}
-	if listenPortHTTPS != "" {
-		return listenPortHTTPS
-	}
-	if listenPortHTTP != "" {
-		return listenPortHTTP
-	}
-
-	return "8080"
-}
+type ListenerPortType string
 
 const (
-	ListenerControlAPI = "tyk.io/control"
-	ListenerListenPort = "tyk.io/listen"
+	ListenerControlAPI ListenerPortType = "tyk.io/control"
+	ListenerListenPort ListenerPortType = "tyk.io/listen"
 )
-
-func controlPortEnabled(listeners []gwv1.Listener) (gwv1.Listener, bool) {
-	for _, listener := range listeners {
-		if listener.Protocol == ListenerControlAPI {
-			return listener, true
-		}
-	}
-
-	return gwv1.Listener{}, false
-}
 
 func setGwClassConditionAccepted(gwClass *gwv1.GatewayClass) error {
 	if gwClass == nil {
@@ -209,7 +160,7 @@ func validParametersRef(ref *gwv1.ParametersReference) bool {
 
 func validListenerProtocol(protocol gwv1.ProtocolType) bool {
 	if protocol != gwv1.HTTPProtocolType && protocol != gwv1.HTTPSProtocolType &&
-		protocol != ListenerControlAPI && protocol != ListenerListenPort {
+		protocol != gwv1.ProtocolType(ListenerControlAPI) && protocol != gwv1.ProtocolType(ListenerListenPort) {
 		return false
 	}
 

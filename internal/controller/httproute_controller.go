@@ -86,7 +86,7 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 		svcName := generateSvcName(gw.Name, regularSvcType)
 		for _, listener := range gw.Spec.Listeners {
-			if listener.Protocol == ListenerControlAPI {
+			if listener.Protocol == v1.ProtocolType(ListenerControlAPI) {
 				svcName = generateSvcName(gw.Name, controlSvcType)
 			}
 		}
