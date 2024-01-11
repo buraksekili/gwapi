@@ -34,6 +34,8 @@ type GatewayConfigurationSpec struct {
 
 type Tyk struct {
 	ConfigMapRef NamespacedName `json:"configMapRef,omitempty"`
+	Auth         string         `json:"auth,omitempty"`
+	Org          string         `json:"org,omitempty"`
 }
 
 type NamespacedName struct {

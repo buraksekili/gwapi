@@ -38,6 +38,8 @@ metadata:
   namespace: tyk
 spec:
   tyk:
+    auth: CHANGEME
+    org: foo
     configMapRef:
       name: tyk-gw-conf
       namespace: tyk

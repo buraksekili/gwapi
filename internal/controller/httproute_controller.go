@@ -70,7 +70,6 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// TODO: add finalizer
 
-	contexes := []v1alpha1.OperatorContext{}
 	for _, ref := range desired.Spec.ParentRefs {
 		// we only support gateway at the moment. svc can be implemented as well
 		ns := desired.Namespace
@@ -100,23 +99,23 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 		// TODO: obtain gw protocol through listeners, no need to get svc
 
-		// we can do it another controller as well
-		c := v1alpha1.OperatorContext{
-			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-context", ref.Name), Namespace: gw.Namespace},
-			Spec: v1alpha1.OperatorContextSpec{
-				Env: &v1alpha1.Environment{
-					Mode: "ce",
-					URL:  fmt.Sprintf("http://%s.%s.svc:9696", svcName, ns),
-				},
-			},
-		}
-
-		if err := r.Client.Create(ctx, &c); err != nil {
-			l.Info("failed to create operator context")
-			return ctrl.Result{}, err
-		}
-
-		contexes = append(contexes, c)
+		//// we can do it another controller as well
+		//c := v1alpha1.OperatorContext{
+		//	ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-context", ref.Name), Namespace: gw.Namespace},
+		//	Spec: v1alpha1.OperatorContextSpec{
+		//		Env: &v1alpha1.Environment{
+		//			Mode: "ce",
+		//			URL:  fmt.Sprintf("http://%s.%s.svc:9696", svcName, ns),
+		//		},
+		//	},
+		//}
+		//
+		//if err := r.Client.Create(ctx, &c); err != nil {
+		//	l.Info("failed to create operator context")
+		//	return ctrl.Result{}, err
+		//}
+		//
+		//contexts = append(contexts, c)
 	}
 
 	for _, rule := range desired.Spec.Rules {
@@ -136,9 +135,22 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 					Namespace: desired.Namespace,
 				}
 
-				for _, c := range contexes {
-					_, err := controllerutil.CreateOrUpdate(ctx, r.Client, &apiDef, func() error {
-						if err := controllerutil.SetOwnerReference(desired, &apiDef, r.Scheme); err != nil {
+				for _, gwRef := range desired.Spec.ParentRefs {
+					ns := desired.Namespace
+					if gwRef.Namespace != nil {
+						ns = string(*gwRef.Namespace)
+					}
+
+					c := v1alpha1.OperatorContext{}
+
+					err := r.Client.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("%s-context", gwRef.Name), Namespace: ns}, &c)
+					if err != nil {
+						l.Error(err, "failed find OperatorContext")
+						return ctrl.Result{}, err
+					}
+
+					_, err = controllerutil.CreateOrUpdate(ctx, r.Client, &apiDef, func() error {
+						if err = controllerutil.SetOwnerReference(desired, &apiDef, r.Scheme); err != nil {
 							l.Error(err, "failed to set owner reference")
 							return err
 						}

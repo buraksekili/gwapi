@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	tykV1Alpha1 "github.com/TykTechnologies/tyk-operator/api/v1alpha1"
 	"github.com/buraksekili/gateway-api-tyk/api/v1alpha1"
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/apps/v1"
@@ -131,6 +132,8 @@ func (r *GatewayReconciler) reconcileDelete(ctx context.Context, gw *gwv1.Gatewa
 	return ctrl.Result{}, nil
 }
 
+const usedByGatewayName = "tyk.io/gateway-name"
+const usedByGatewayNamespace = "tyk.io/gateway-ns"
 const tykManagedBy = "tyk.tyk.io/managed-by"
 
 func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gwv1.Gateway, conf v1alpha1.GatewayConfiguration) (ctrl.Result, error) {
@@ -221,14 +224,15 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 		return ctrl.Result{}, err
 	}
 
+	svcControlApi := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      generateSvcName(gw.Name, ControlSvc),
+			Namespace: gw.Namespace,
+		},
+	}
+
 	// this one should be accessible LB
 	if controlApiEnabled {
-		svcControlApi := &corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      generateSvcName(gw.Name, ControlSvc),
-				Namespace: gw.Namespace,
-			},
-		}
 		err = r.createOrUpdate(ctx, svcControlApi, func() error {
 			if err = ctrl.SetControllerReference(gw, svcControlApi, r.Scheme); err != nil {
 				l.Info("Failed to update controller reference of the gateway deployment")
@@ -257,6 +261,46 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 			}
 		}
 	}
+
+	auth := ""
+	if conf.Spec.Tyk.Auth != "" {
+		auth = conf.Spec.Tyk.Auth
+	}
+	org := ""
+	if conf.Spec.Tyk.Org != "" {
+		auth = conf.Spec.Tyk.Org
+	}
+
+	// TODO: check if tls enabled
+	svcURL := fmt.Sprintf("http://%s.%s.svc:%v", svc.Name, svc.Namespace, svc.Spec.Ports[0].Port)
+	if controlApiEnabled {
+		svcURL = fmt.Sprintf("http://%s.%s.svc:%v", svcControlApi.Name, svcControlApi.Namespace, svcControlApi.Spec.Ports[0].Port)
+	}
+
+	// we can do it another controller as well
+	c := tykV1Alpha1.OperatorContext{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-context", gw.Name),
+			Namespace: gw.Namespace,
+			Labels: map[string]string{
+				usedByGatewayName:      gw.ObjectMeta.Name,
+				usedByGatewayNamespace: gw.ObjectMeta.Namespace,
+			},
+		},
+	}
+
+	err = r.createOrUpdate(ctx, &c, func() error {
+		c.Spec = tykV1Alpha1.OperatorContextSpec{
+			Env: &tykV1Alpha1.Environment{
+				Mode: "ce",
+				URL:  svcURL,
+				Auth: auth,
+				Org:  org,
+			},
+		}
+
+		return nil
+	})
 
 	return ctrl.Result{}, nil
 }
