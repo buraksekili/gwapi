@@ -84,10 +84,10 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return ctrl.Result{}, err
 		}
 
-		svcName := generateSvcName(gw.Name, RegularSvc)
+		svcName := generateSvcName(gw.Name, regularSvcType)
 		for _, listener := range gw.Spec.Listeners {
 			if listener.Protocol == ListenerControlAPI {
-				svcName = generateSvcName(gw.Name, ControlSvc)
+				svcName = generateSvcName(gw.Name, controlSvcType)
 			}
 		}
 
@@ -96,26 +96,6 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			l.Info("failed to find Service", "Service", types.NamespacedName{Name: svcName, Namespace: gw.Namespace}.String())
 			return ctrl.Result{}, err
 		}
-
-		// TODO: obtain gw protocol through listeners, no need to get svc
-
-		//// we can do it another controller as well
-		//c := v1alpha1.OperatorContext{
-		//	ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-context", ref.Name), Namespace: gw.Namespace},
-		//	Spec: v1alpha1.OperatorContextSpec{
-		//		Env: &v1alpha1.Environment{
-		//			Mode: "ce",
-		//			URL:  fmt.Sprintf("http://%s.%s.svc:9696", svcName, ns),
-		//		},
-		//	},
-		//}
-		//
-		//if err := r.Client.Create(ctx, &c); err != nil {
-		//	l.Info("failed to create operator context")
-		//	return ctrl.Result{}, err
-		//}
-		//
-		//contexts = append(contexts, c)
 	}
 
 	for _, rule := range desired.Spec.Rules {

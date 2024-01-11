@@ -35,7 +35,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
-	"strconv"
 )
 
 const finalizer = "finalizers.buraksekili.github.io/gateway-api-tyk"
@@ -132,9 +131,11 @@ func (r *GatewayReconciler) reconcileDelete(ctx context.Context, gw *gwv1.Gatewa
 	return ctrl.Result{}, nil
 }
 
-const usedByGatewayName = "tyk.io/gateway-name"
-const usedByGatewayNamespace = "tyk.io/gateway-ns"
-const tykManagedBy = "tyk.tyk.io/managed-by"
+const (
+	gatewayNameLabel      = "tyk.io/gateway-name"
+	gatewayNamespaceLabel = "tyk.io/gateway-ns"
+	tykManagedBy          = "tyk.tyk.io/managed-by"
+)
 
 func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gwv1.Gateway, conf v1alpha1.GatewayConfiguration) (ctrl.Result, error) {
 	controllerutil.AddFinalizer(gw, finalizer)
@@ -191,7 +192,7 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 		}}
 
 		if controlApiEnabled {
-			envs = append(envs, corev1.EnvVar{Name: "TYK_GW_CONTROLAPIPORT", Value: listenerToStr(controlApiListener)})
+			envs = append(envs, corev1.EnvVar{Name: "TYK_GW_CONTROLAPIPORT", Value: portToStr(controlApiListener.Port)})
 		}
 
 		deploy.Spec.Template.Spec.Containers[0].Env = envs
@@ -207,7 +208,7 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      generateSvcName(gw.Name, RegularSvc),
+			Name:      generateSvcName(gw.Name, regularSvcType),
 			Namespace: gw.Namespace},
 	}
 	err = r.createOrUpdate(ctx, svc, func() error {
@@ -226,7 +227,7 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 
 	svcControlApi := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      generateSvcName(gw.Name, ControlSvc),
+			Name:      generateSvcName(gw.Name, controlSvcType),
 			Namespace: gw.Namespace,
 		},
 	}
@@ -242,7 +243,7 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 			reconcileService(
 				svcControlApi,
 				deploy.ObjectMeta.Labels,
-				[]corev1.ContainerPort{listToContainerPort(controlApiListener)},
+				[]corev1.ContainerPort{listenerToContainerPort(controlApiListener)},
 			)
 			return nil
 		})
@@ -283,8 +284,8 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 			Name:      fmt.Sprintf("%s-context", gw.Name),
 			Namespace: gw.Namespace,
 			Labels: map[string]string{
-				usedByGatewayName:      gw.ObjectMeta.Name,
-				usedByGatewayNamespace: gw.ObjectMeta.Namespace,
+				gatewayNameLabel:      gw.ObjectMeta.Name,
+				gatewayNamespaceLabel: gw.ObjectMeta.Namespace,
 			},
 		},
 	}
@@ -303,83 +304,6 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 	})
 
 	return ctrl.Result{}, nil
-}
-
-const (
-	ControlSvc int = iota
-	RegularSvc int = iota
-)
-
-func generateSvcName(gwName string, svcType int) string {
-	if svcType == ControlSvc {
-		return fmt.Sprintf("%s-tyk-gateway-control-api-service", gwName)
-	}
-
-	return fmt.Sprintf("%s-tyk-gateway-service", gwName)
-}
-
-func listToContainerPort(listener gwv1.Listener) corev1.ContainerPort {
-	return corev1.ContainerPort{
-		Name:          string(listener.Name),
-		ContainerPort: int32(listener.Port),
-	}
-}
-
-func listenerToStr(listener gwv1.Listener) string {
-	return strconv.Itoa(int(listener.Port))
-}
-
-func controlPortEnabled(listeners []gwv1.Listener) (gwv1.Listener, bool) {
-	for _, listener := range listeners {
-		if listener.Protocol == ListenerControlAPI {
-			return listener, true
-		}
-	}
-
-	return gwv1.Listener{}, false
-}
-
-func decideTykGwListenPort(listeners []gwv1.Listener) string {
-	listenPortListener := ""
-	listenPortHTTPS := ""
-	listenPortHTTP := ""
-
-	for _, listener := range listeners {
-		switch listener.Protocol {
-		case ListenerListenPort:
-			listenPortListener = strconv.Itoa(int(listener.Port))
-		case gwv1.HTTPSProtocolType:
-			listenPortHTTPS = strconv.Itoa(int(listener.Port))
-		case gwv1.HTTPProtocolType:
-			listenPortHTTP = strconv.Itoa(int(listener.Port))
-		}
-	}
-
-	if listenPortListener != "" {
-		return listenPortListener
-	}
-	if listenPortHTTPS != "" {
-		return listenPortHTTPS
-	}
-	if listenPortHTTP != "" {
-		return listenPortHTTP
-	}
-
-	return "8080"
-}
-
-const (
-	ListenerControlAPI = "tyk.io/control"
-	ListenerListenPort = "tyk.io/listen"
-)
-
-func validListenerProtocol(protocol gwv1.ProtocolType) bool {
-	if protocol != gwv1.HTTPProtocolType && protocol != gwv1.HTTPSProtocolType &&
-		protocol != ListenerControlAPI && protocol != ListenerListenPort {
-		return false
-	}
-
-	return true
 }
 
 // SetupWithManager sets up the controller with the Manager.

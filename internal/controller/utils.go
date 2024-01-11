@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/api/core/v1"
@@ -9,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	"strconv"
 )
 
 func reconcileService(svc *v1.Service, ls map[string]string, ports []v1.ContainerPort) {
@@ -109,19 +111,77 @@ func getRawMap(data map[gwv1.AnnotationKey]gwv1.AnnotationValue) map[string]stri
 	return d
 }
 
-func getEnv(envs []v1.EnvVar, envName string) v1.EnvVar {
-	for _, env := range envs {
-		if env.Name == envName {
-			return env
-		}
-	}
-
-	return v1.EnvVar{}
-}
-
 var (
 	ErrNilGWClass = errors.New("Invalid Gateway Class provided; nil value")
 )
+
+const (
+	controlSvcType int = iota
+	regularSvcType int = iota
+)
+
+func generateSvcName(gwName string, svcType int) string {
+	if svcType == controlSvcType {
+		return fmt.Sprintf("%s-tyk-gateway-control-api-service", gwName)
+	}
+
+	return fmt.Sprintf("%s-tyk-gateway-service", gwName)
+}
+
+func listenerToContainerPort(listener gwv1.Listener) v1.ContainerPort {
+	return v1.ContainerPort{
+		Name:          string(listener.Name),
+		ContainerPort: int32(listener.Port),
+	}
+}
+
+func portToStr(port gwv1.PortNumber) string {
+	return strconv.Itoa(int(port))
+}
+
+func decideTykGwListenPort(listeners []gwv1.Listener) string {
+	listenPortListener := ""
+	listenPortHTTPS := ""
+	listenPortHTTP := ""
+
+	for _, listener := range listeners {
+		switch listener.Protocol {
+		case ListenerListenPort:
+			listenPortListener = strconv.Itoa(int(listener.Port))
+		case gwv1.HTTPSProtocolType:
+			listenPortHTTPS = strconv.Itoa(int(listener.Port))
+		case gwv1.HTTPProtocolType:
+			listenPortHTTP = strconv.Itoa(int(listener.Port))
+		}
+	}
+
+	if listenPortListener != "" {
+		return listenPortListener
+	}
+	if listenPortHTTPS != "" {
+		return listenPortHTTPS
+	}
+	if listenPortHTTP != "" {
+		return listenPortHTTP
+	}
+
+	return "8080"
+}
+
+const (
+	ListenerControlAPI = "tyk.io/control"
+	ListenerListenPort = "tyk.io/listen"
+)
+
+func controlPortEnabled(listeners []gwv1.Listener) (gwv1.Listener, bool) {
+	for _, listener := range listeners {
+		if listener.Protocol == ListenerControlAPI {
+			return listener, true
+		}
+	}
+
+	return gwv1.Listener{}, false
+}
 
 func setGwClassConditionAccepted(gwClass *gwv1.GatewayClass) error {
 	if gwClass == nil {
@@ -145,6 +205,15 @@ func validParametersRef(ref *gwv1.ParametersReference) bool {
 	}
 
 	return ref.Name != "" && ref.Group == "gateway" && ref.Kind == "GatewayConfiguration"
+}
+
+func validListenerProtocol(protocol gwv1.ProtocolType) bool {
+	if protocol != gwv1.HTTPProtocolType && protocol != gwv1.HTTPSProtocolType &&
+		protocol != ListenerControlAPI && protocol != ListenerListenPort {
+		return false
+	}
+
+	return true
 }
 
 type updateResults string
