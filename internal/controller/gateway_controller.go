@@ -119,7 +119,7 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.reconcileDelete(ctx, &gw)
 	}
 
-	return r.reconcile(ctx, l, &gw, tykGwConf)
+	return r.reconcileGateway(ctx, l, &gw, tykGwConf)
 }
 
 func (r *GatewayReconciler) reconcileDelete(ctx context.Context, gw *gwv1.Gateway) (ctrl.Result, error) {
@@ -136,16 +136,11 @@ const (
 	tykManagedBy          = "tyk.tyk.io/managed-by"
 )
 
-func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gwv1.Gateway, conf v1alpha1.GatewayConfiguration) (ctrl.Result, error) {
+func (r *GatewayReconciler) reconcileGateway(ctx context.Context, l logr.Logger, gw *gwv1.Gateway, conf v1alpha1.GatewayConfiguration) (ctrl.Result, error) {
+	// TODO: it is not added at the moment. consider adding it.
 	controllerutil.AddFinalizer(gw, finalizer)
 
-	svcPorts := make(map[string]corev1.ServicePort)
-	for _, listener := range gw.Spec.Listeners {
-		svcPorts[string(listener.Protocol)] = corev1.ServicePort{
-			Name: string(listener.Name),
-			Port: int32(listener.Port),
-		}
-	}
+	svcPorts := listenersToMap(gw.Spec.Listeners)
 
 	deploy, err := r.reconcileDeployment(ctx, gw, &conf, svcPorts)
 	if err != nil {
@@ -163,13 +158,13 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 		return ctrl.Result{}, err
 	}
 
-	controlAPISvcReq := svcReconcileReq{
+	err = r.reconcileControlApiSvc(ctx, svcReconcileReq{
 		svcType:        controlSvcType,
 		ownerGw:        gw,
 		selectorLabels: deploy.Labels,
 		svcPorts:       svcPorts,
-	}
-	if err = r.reconcileControlApiSvc(ctx, controlAPISvcReq); err != nil {
+	})
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -217,6 +212,18 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 	return ctrl.Result{}, nil
 }
 
+func listenersToMap(listeners []gwv1.Listener) map[string]corev1.ServicePort {
+	svcPorts := make(map[string]corev1.ServicePort)
+	for _, listener := range listeners {
+		svcPorts[string(listener.Protocol)] = corev1.ServicePort{
+			Name: string(listener.Name),
+			Port: int32(listener.Port),
+		}
+	}
+
+	return svcPorts
+}
+
 func (r *GatewayReconciler) reconcileDeployment(
 	ctx context.Context,
 	gw *gwv1.Gateway,
@@ -232,23 +239,7 @@ func (r *GatewayReconciler) reconcileDeployment(
 		}
 	}
 
-	labels := map[gwv1.AnnotationKey]gwv1.AnnotationValue{}
-	annotations := map[gwv1.AnnotationKey]gwv1.AnnotationValue{}
-
-	if gw.Spec.Infrastructure != nil {
-		labels = gw.Spec.Infrastructure.Labels
-		annotations = gw.Spec.Infrastructure.Annotations
-	}
-
-	labels[tykManagedBy] = gwv1.AnnotationValue(fmt.Sprintf("%s-%s", gw.Namespace, gw.Name))
-
-	deploy := v1.Deployment{ObjectMeta: metav1.ObjectMeta{
-		Name:        fmt.Sprintf("%s-tyk-gateway", gw.Name),
-		Namespace:   gw.Namespace,
-		Labels:      getRawMap(labels),
-		Annotations: getRawMap(annotations),
-	}}
-	reconcileDeployment(&deploy, tykConfigMap)
+	deploy := prepareDeployment(gw)
 
 	err := r.createOrUpdate(ctx, &deploy, func() error {
 		if err := ctrl.SetControllerReference(gw, &deploy, r.Scheme); err != nil {
@@ -260,7 +251,7 @@ func (r *GatewayReconciler) reconcileDeployment(
 			lpSvcPort = lp
 		}
 
-		handleConfigMap(tykConfigMap, &deploy)
+		mountConfigMap(tykConfigMap, &deploy)
 
 		openPortOnDeploy(&deploy, ListenerListenPort, lpSvcPort)
 
@@ -374,6 +365,7 @@ func (r *GatewayReconciler) reconcileSvc(ctx context.Context, req svcReconcileRe
 			}
 		}
 
+		// TODO: no need here
 		reconcileService(svc, req.selectorLabels, ports)
 
 		return nil

@@ -23,15 +23,24 @@ func reconcileService(svc *v1.Service, ls map[string]string, ports []v1.ServiceP
 	}
 }
 
-func reconcileDeployment(deploy *appsv1.Deployment, configMap *v1.ConfigMap) {
-	if deploy == nil {
-		return
+func prepareDeployment(gw *gwv1.Gateway) appsv1.Deployment {
+	deploy := appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-tyk-gateway", gw.Name),
+			Namespace: gw.Namespace,
+		},
 	}
 
-	replica := int32(1)
+	if gw.Spec.Infrastructure != nil {
+		deploy.Labels = getRawMap(gw.Spec.Infrastructure.Labels)
+		deploy.Annotations = getRawMap(gw.Spec.Infrastructure.Annotations)
+	}
+
+	deploy.Labels = addToMap(deploy.Labels, gatewayNameLabel, gw.Name)
+	deploy.Labels = addToMap(deploy.Labels, gatewayNamespaceLabel, gw.Namespace)
 
 	deploy.Spec = appsv1.DeploymentSpec{
-		Replicas: &replica,
+		Replicas: int32ToPtr(1),
 		Selector: &metav1.LabelSelector{
 			MatchLabels: deploy.Labels,
 		},
@@ -51,16 +60,19 @@ func reconcileDeployment(deploy *appsv1.Deployment, configMap *v1.ConfigMap) {
 		},
 	}
 
+	return deploy
 }
 
-func handleConfigMap(configMap *v1.ConfigMap, deploy *appsv1.Deployment) {
+func int32ToPtr(i int32) *int32 {
+	return &i
+}
+
+func mountConfigMap(configMap *v1.ConfigMap, deploy *appsv1.Deployment) {
 	if configMap == nil || deploy == nil {
 		return
 	}
 
-	anns := deploy.Spec.Template.GetAnnotations()
-	addToAnnotations(anns, ConfigMapResourceVersionAnnKey, configMap.ResourceVersion)
-	deploy.Spec.Template.SetAnnotations(anns)
+	deploy.Spec.Template.Annotations = addToMap(deploy.Spec.Template.Annotations, ConfigMapResourceVersionAnnKey, configMap.ResourceVersion)
 
 	deploy.Spec.Template.Spec.Volumes = []v1.Volume{
 		{
@@ -84,7 +96,7 @@ func handleConfigMap(configMap *v1.ConfigMap, deploy *appsv1.Deployment) {
 	}
 }
 
-func addToAnnotations(anns map[string]string, key, value string) map[string]string {
+func addToMap(anns map[string]string, key, value string) map[string]string {
 	if anns == nil {
 		anns = make(map[string]string)
 	}
