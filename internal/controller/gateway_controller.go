@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+
 	tykV1Alpha1 "github.com/TykTechnologies/tyk-operator/api/v1alpha1"
 	"github.com/buraksekili/gateway-api-tyk/api/v1alpha1"
 	"github.com/go-logr/logr"
@@ -267,9 +268,10 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 	if conf.Spec.Tyk.Auth != "" {
 		auth = conf.Spec.Tyk.Auth
 	}
+
 	org := ""
 	if conf.Spec.Tyk.Org != "" {
-		auth = conf.Spec.Tyk.Org
+		org = conf.Spec.Tyk.Org
 	}
 
 	// TODO: check if tls enabled

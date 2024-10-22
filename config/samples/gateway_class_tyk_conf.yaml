@@ -16,7 +16,7 @@ data:
       "middleware_path": "/opt/tyk-gateway/middleware",
       "storage": {
         "type": "redis",
-        "addrs": ["redis.tyk.svc:6379"],
+        "addrs": ["redis.default.svc:6379"],
         "port": 6379,
         "password": "",
         "database": 0,
