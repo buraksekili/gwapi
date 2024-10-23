@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -33,9 +34,10 @@ type GatewayConfigurationSpec struct {
 }
 
 type Tyk struct {
-	ConfigMapRef NamespacedName `json:"configMapRef,omitempty"`
-	Auth         string         `json:"auth,omitempty"`
-	Org          string         `json:"org,omitempty"`
+	ExtraEnvs    []corev1.EnvVar `json:"extraEnvs,omitempty"`
+	ConfigMapRef NamespacedName  `json:"configMapRef,omitempty"`
+	Auth         string          `json:"auth,omitempty"`
+	Org          string          `json:"org,omitempty"`
 }
 
 type NamespacedName struct {

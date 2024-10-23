@@ -67,7 +67,4 @@ spec:
     - name: http
       port: 8080
       protocol: HTTP
-    - name: control-port
-      port: 9696
-      protocol: tyk.io/control
 ---

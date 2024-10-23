@@ -35,7 +35,7 @@ func reconcileService(svc *v1.Service, ls map[string]string, ports []v1.Containe
 	}
 }
 
-func reconcileDeployment(deploy *appsv1.Deployment, configMap *v1.ConfigMap) {
+func reconcileDeployment(deploy *appsv1.Deployment, configMap *v1.ConfigMap, envs []v1.EnvVar) {
 	if deploy == nil {
 		return
 	}
@@ -57,6 +57,7 @@ func reconcileDeployment(deploy *appsv1.Deployment, configMap *v1.ConfigMap) {
 					{
 						Name:  "tyk-gateway",
 						Image: "docker.tyk.io/tyk-gateway/tyk-gateway:v5.2.3",
+						Env:   envs,
 					},
 				},
 			},

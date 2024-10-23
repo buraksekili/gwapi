@@ -177,7 +177,7 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 			return err
 		}
 
-		reconcileDeployment(&deploy, tykConfigMap)
+		reconcileDeployment(&deploy, tykConfigMap, conf.Spec.Tyk.ExtraEnvs)
 		containerPorts := deploy.Spec.Template.Spec.Containers[0].Ports
 
 		for _, listener := range gw.Spec.Listeners {
@@ -188,9 +188,24 @@ func (r *GatewayReconciler) reconcile(ctx context.Context, l logr.Logger, gw *gw
 		}
 
 		deploy.Spec.Template.Spec.Containers[0].Ports = containerPorts
-		envs := []corev1.EnvVar{{
-			Name: "TYK_GW_LISTENPORT", Value: decideTykGwListenPort(gw.Spec.Listeners),
-		}}
+		envs := conf.Spec.Tyk.ExtraEnvs
+		if envs == nil {
+			envs = make([]corev1.EnvVar, 0)
+		}
+
+		exists := false
+		for _, env := range envs {
+			if env.Name == "TYK_GW_LISTENPORT" {
+				exists = true
+				env.Value = decideTykGwListenPort(gw.Spec.Listeners)
+			}
+		}
+
+		if !exists {
+			envs = append(envs, corev1.EnvVar{
+				Name: "TYK_GW_LISTENPORT", Value: decideTykGwListenPort(gw.Spec.Listeners),
+			})
+		}
 
 		if controlApiEnabled {
 			envs = append(envs, corev1.EnvVar{Name: "TYK_GW_CONTROLAPIPORT", Value: portToStr(controlApiListener.Port)})

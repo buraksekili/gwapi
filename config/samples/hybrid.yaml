@@ -1,0 +1,201 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tyk-gw-conf
+  namespace: default
+data:
+  tyk.conf: |
+    {
+      "log_level": "debug",
+      "listen_port": 8080,
+      "secret": "CHANGEME",
+      "template_path": "/opt/tyk-gateway/templates",
+      "node_secret": "CHANGEME",
+      "use_db_app_configs": false,
+      "app_path": "/opt/tyk-gateway/apps/",
+      "middleware_path": "/opt/tyk-gateway/middleware",
+      "storage": {
+        "type": "redis",
+        "addrs": ["redis.default.svc:6379"],
+        "port": 6379,
+        "password": "",
+        "database": 0,
+        "optimisation_max_idle": 100,
+        "optimisation_max_active": 500
+      },
+      "enable_analytics": false,
+      "policies": {
+        "policy_source": "file",
+        "policy_record_name": "/opt/tyk-gateway/policies/policies.json"
+      },
+      "hash_keys": true
+    }
+---
+apiVersion: gateway.buraksekili.github.io/v1alpha1
+kind: GatewayConfiguration
+metadata:
+  name: tyk-gw-oss
+  namespace: default
+spec:
+  tyk:
+    auth: CHANGEME
+    org: foo
+    configMapRef:
+      name: tyk-gw-conf
+      namespace: default
+    extraEnvs:
+      - name: TYK_GW_LISTENPORT
+        value: "8080"
+      - name: TYK_GW_OAS_VALIDATE_EXAMPLES
+        value: "false"
+      - name: TYK_GW_OAS_VALIDATE_SCHEMA_DEFAULTS
+        value: "false"
+      - name: TYK_GW_ENABLEFIXEDWINDOWRATELIMITER
+        value: "false"
+      - name: TYK_GW_HTTPSERVEROPTIONS_ENABLEPATHPREFIXMATCHING
+        value: "true"
+      - name: TYK_GW_HTTPSERVEROPTIONS_ENABLEPATHSUFFIXMATCHING
+        value: "true"
+      - name: TYK_GW_HTTPSERVEROPTIONS_ENABLESTRICTROUTES
+        value: "true"
+
+      # Redis TLS configurations
+
+      # Legacy support for Redis Cluster driver. Driver dropped in v3.0.0.
+      - name: REDIGOCLUSTER_SHARDCOUNT
+        value: "128"
+      - name: TYK_GW_STORAGE_TYPE
+        value: "redis"
+      - name: TYK_GW_STORAGE_ADDRS
+        value: "tyk-redis-master.tyk.svc.cluster.local:6379"
+
+      - name: TYK_GW_STORAGE_ENABLECLUSTER
+        value: "false"
+
+
+      - name: TYK_GW_STORAGE_DATABASE
+        value: "0"
+#      - name: TYK_GW_STORAGE_PASSWORD
+#        valueFrom:
+#          secretKeyRef:
+#            name: tyk-redis
+#            key: redis-password
+      - name: TYK_GW_STORAGE_USESSL
+        value: "false"
+#      - name: TYK_GW_SECRET
+#        valueFrom:
+#          secretKeyRef:
+#            name: secrets-hybrid-dp-tyk-gateway
+#            key: APISecret
+#      - name: TYK_GW_NODESECRET
+#        valueFrom:
+#          secretKeyRef:
+#            name: secrets-hybrid-dp-tyk-gateway
+#            key: APISecret
+
+      - name: TYK_GW_POLICIES_ALLOWEXPLICITPOLICYID
+        value: "true"
+      - name: TYK_GW_HTTPSERVEROPTIONS_USESSL
+        value: "false"
+      - name: TYK_GW_TEMPLATEPATH
+        value: "/opt/tyk-gateway/templates"
+      - name: TYK_GW_TYKJSPATH
+        value: "/opt/tyk-gateway/js/tyk.js"
+      - name: TYK_GW_MIDDLEWAREPATH
+        value: "/mnt/tyk-gateway/middleware"
+      - name: TYK_GW_APPPATH
+        value: "/mnt/tyk-gateway/apps"
+      - name: TYK_GW_POLICIES_POLICYPATH
+        value: "/mnt/tyk-gateway/policies"
+      - name: TYK_GW_STORAGE_MAXIDLE
+        value: "1000"
+      - name: TYK_GW_ENABLENONTRANSACTIONALRATELIMITER
+        value: "true"
+      - name: TYK_GW_POLICIES_POLICYSOURCE
+        value: "rpc"
+
+      # Set this environment variable only if either analyticsEnabled or global.components.pump is set
+
+
+      - name: TYK_GW_ANALYTICSCONFIG_TYPE
+        value: ""
+      - name: TYK_GW_SLAVEOPTIONS_USERPC
+        value: "true"
+      - name: TYK_GW_AUTHOVERRIDE_FORCEAUTHPROVIDER
+        value: "true"
+      - name: TYK_GW_AUTHOVERRIDE_AUTHPROVIDER_STORAGEENGINE
+        value: "rpc"
+      - name: TYK_GW_SLAVEOPTIONS_RPCKEY
+
+        value: "664f5023d4df31000105fc8d"
+
+      - name: TYK_GW_SLAVEOPTIONS_APIKEY
+
+        value: "6fd486e72b5e47cc616c994e0430ec1f"
+
+      - name: TYK_GW_SLAVEOPTIONS_GROUPID
+
+        value: "dp1"
+
+      - name: TYK_GW_SLAVEOPTIONS_CONNECTIONSTRING
+        value: "rural-gander-hyb.aws-euw2.cloud-ara.tyk.io:443"
+      - name: TYK_GW_SLAVEOPTIONS_USESSL
+        value: "true"
+      - name: TYK_GW_SLAVEOPTIONS_SSLINSECURESKIPVERIFY
+        value: "true"
+      - name: TYK_GW_POLICIES_POLICYRECORDNAME
+        value: "tyk_policies"
+      - name: TYK_GW_HASHKEYS
+        value: "true"
+      - name: TYK_GW_HASHKEYFUNCTION
+        value: "murmur128"
+      - name: TYK_GW_HTTPSERVEROPTIONS_ENABLEWEBSOCKETS
+        value: "true"
+      - name: TYK_GW_HTTPSERVEROPTIONS_MINVERSION
+        value: "771"
+      - name: TYK_GW_HTTPSERVEROPTIONS_CERTIFICATES
+        value: '[{"cert_file":"/etc/certs/tyk-gateway/tls.crt","domain_name":"*","key_file":"/etc/certs/tyk-gateway/tls.key"}]'
+      - name: TYK_GW_HTTPSERVEROPTIONS_SSLINSECURESKIPVERIFY
+        value: "false"
+      - name: TYK_GW_ALLOWINSECURECONFIGS
+        value: "true"
+      - name: TYK_GW_COPROCESSOPTIONS_ENABLECOPROCESS
+        value: "true"
+      - name: TYK_GW_GLOBALSESSIONLIFETIME
+        value: "100"
+      - name: TYK_GW_MAXIDLECONNSPERHOST
+        value: "500"
+      - name: TYK_GW_ENABLECUSTOMDOMAINS
+        value: "true"
+      - name: TYK_GW_PIDFILELOCATION
+        value: "/mnt/tyk-gateway/tyk.pid"
+      - name: TYK_GW_DBAPPCONFOPTIONS_NODEISSEGMENTED
+        value: "true"
+      - name: TYK_GW_DBAPPCONFOPTIONS_TAGS
+        value: "dp1-gw1"
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: tykconf
+spec:
+  controllerName: buraksekili.github.com/gateway-api-controller-tyk
+  parametersRef:
+    group: gateway
+    kind: GatewayConfiguration
+    name: tyk-gw-oss
+    namespace: default
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tyk-gateway-hybrid
+  namespace: default
+spec:
+  gatewayClassName: tykconf
+  listeners:
+    - name: http
+      port: 8080
+      protocol: HTTP
+---
